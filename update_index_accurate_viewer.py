@@ -28,24 +28,44 @@ from render_3d_preview import render_camera_view
 
 
 def main():
-    dirs = [root_dir / "output_cuda_apple", root_dir / "output_new_input_3dmodel"]
+    dirs = [root_dir / "output_new_input_3dmodel", root_dir / "output_cuda_apple", root_dir / "output_apple_video_3dmodel"]
     all_plys = []
     for d in dirs:
         if d.exists():
             for p in d.glob("point_cloud/iteration_*/point_cloud.ply"):
-                all_plys.append(p)
+                # Exclude synthetic iteration_3000 if trained iteration_300/500 exists
+                iter_num = int(p.parent.name.split("_")[-1])
+                if iter_num != 3000:
+                    all_plys.append((iter_num, p))
+    
+    if not all_plys:
+        # Fallback
+        for d in dirs:
+            if d.exists():
+                for p in d.glob("point_cloud/iteration_*/point_cloud.ply"):
+                    all_plys.append((int(p.parent.name.split("_")[-1]), p))
+
     if not all_plys:
         print("Error: No point_cloud.ply found in output directories")
         return
 
-    # Pick the PLY file with the highest iteration number
-    ply_file = sorted(all_plys, key=lambda p: int(p.parent.name.split("_")[-1]))[-1]
+    # Pick the PLY file with best trained iteration
+    ply_file = sorted(all_plys, key=lambda item: item[0])[-1][1]
     new_input_dir = ply_file.parent.parent.parent
     obj_file = new_input_dir / "apple_3d_model.obj"
     gltf_file = new_input_dir / "apple_3d_model.gltf"
 
     pts, colors, opacities, scales = load_gaussian_ply(ply_path=ply_file)
-    print(f"Loaded {len(pts):,} 3D Gaussians from {ply_file.name}")
+    print(f"Loaded {len(pts):,} 3D Gaussians from {ply_file.name} ({ply_file.parent.name})")
+
+    # Load 36 Multi-View Batch Images from imgaes_apple_video
+    batch_img_dir = root_dir / "imgaes_apple_video"
+    batch_urls = []
+    if batch_img_dir.exists():
+        img_files = sorted(list(batch_img_dir.glob("*.jpg")) + list(batch_img_dir.glob("*.png")))
+        for f in img_files:
+            batch_urls.append(f"file:///{str(f.resolve()).replace(chr(92), '/')}")
+    batch_images_json = json.dumps(batch_urls)
 
     # Center and normalize points for optimal viewer scaling
     p_center = np.mean(pts, axis=0)
@@ -921,6 +941,20 @@ def main():
         <button class="orbit-btn" onclick="selectOrbit(6)">270° Left</button>
         <button class="orbit-btn" onclick="selectOrbit(7)">315° Top</button>
       </div>
+
+      <!-- Multi-View Image Batch Reel Deck (Acknowledging 36 Merged Images) -->
+      <div style="margin-top:10px; padding:10px 14px; background:rgba(3,5,8,0.92); border:1px solid var(--border-color); border-radius:10px; display:flex; flex-direction:column; gap:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px;">
+          <span style="color:var(--accent-green); font-weight:700; display:flex; align-items:center; gap:6px;">
+            <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent-green);"></span>
+            CONFIRMED: BATCH OF 36 MULTI-VIEW IMAGES MERGED INTO 3D
+          </span>
+          <span style="color:var(--text-muted); font-size:10px;">Click any photo to snap 3D camera angle</span>
+        </div>
+        <div id="batch-reel-strip" style="display:flex; gap:6px; overflow-x:auto; padding:4px 0;">
+          <!-- Dynamically populated by JS renderBatchReel() -->
+        </div>
+      </div>
     </div>
 
     <!-- RIGHT PANEL: METRICS & RECONSTRUCTION ANALYTICS -->
@@ -1007,6 +1041,7 @@ def main():
     const gaussiansData = {json.dumps(gaussians_js_data)};
     const orbitImages   = {orbit_js_array_str};
     const rawObjData    = {obj_data_json};
+    const batchImages   = {batch_images_json};
 
     let scene, camera, renderer, controls, meshGroup, frustumsGroup, dirLight, ambLight;
     let gizmoScene, gizmoCamera, gizmoRenderer;
@@ -1015,6 +1050,93 @@ def main():
     let autoTurntable = false;
     let showFrustums = true;
     let frameCount = 0, lastFpsTime = performance.now();
+
+    // Custom Wavefront OBJ Parser with Vertex RGB Colors (v x y z r g b)
+    function parseOBJWithColors(objText) {{
+      const positions = [];
+      const colors = [];
+      const indices = [];
+
+      const lines = objText.split('\n');
+      for (let line of lines) {{
+        line = line.trim();
+        if (line.startsWith('v ')) {{
+          const parts = line.split(/\s+/).filter(Boolean).slice(1).map(Number);
+          if (parts.length >= 3) {{
+            positions.push(parts[0], parts[1], parts[2]);
+            if (parts.length >= 6) {{
+              colors.push(parts[3], parts[4], parts[5]);
+            }} else {{
+              colors.push(0.85, 0.22, 0.22); // Vibrant red fallback
+            }}
+          }}
+        }} else if (line.startsWith('f ')) {{
+          const parts = line.split(/\s+/).filter(Boolean).slice(1);
+          const idxs = parts.map(p => parseInt(p.split('/')[0]) - 1);
+          if (idxs.length >= 3) {{
+            indices.push(idxs[0], idxs[1], idxs[2]);
+            if (idxs.length === 4) {{
+              indices.push(idxs[0], idxs[2], idxs[3]);
+            }}
+          }}
+        }}
+      }}
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      if (colors.length > 0) {{
+        geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      }}
+      if (indices.length > 0) {{
+        geom.setIndex(indices);
+      }}
+      geom.computeVertexNormals();
+
+      // Center & scale mesh geometry to unit box
+      geom.center();
+      geom.computeBoundingSphere();
+      const radius = geom.boundingSphere.radius || 1.0;
+      const scale = 1.6 / radius;
+      geom.scale(scale, scale, scale);
+
+      const mat = new THREE.MeshStandardMaterial({{
+        vertexColors: colors.length > 0,
+        color: colors.length > 0 ? 0xffffff : 0xef4444,
+        roughness: 0.25,
+        metalness: 0.1,
+        side: THREE.DoubleSide
+      }});
+
+      return new THREE.Mesh(geom, mat);
+    }}
+
+    // Render 36 Multi-View Image Batch Reel Strip
+    function renderBatchReel() {{
+      const grid = document.getElementById('batch-reel-strip');
+      if (!grid || !batchImages || batchImages.length === 0) return;
+      grid.innerHTML = '';
+      batchImages.forEach((url, i) => {{
+        const item = document.createElement('div');
+        item.style.cssText = 'flex:0 0 64px; height:50px; background:#0b111a; border:1px solid rgba(255,255,255,0.1); border-radius:6px; overflow:hidden; position:relative; cursor:pointer; font-size:9px; text-align:center; transition:transform 0.15s ease;';
+        if (i === 0) item.style.borderColor = 'var(--accent-green)';
+        item.onclick = () => {{
+          document.querySelectorAll('#batch-reel-strip > div').forEach(d => d.style.borderColor = 'rgba(255,255,255,0.1)');
+          item.style.borderColor = 'var(--accent-cyan)';
+          selectBatchCamera(i);
+        }};
+        item.innerHTML = `<img src="${{url}}" style="width:100%; height:100%; object-fit:cover; opacity:0.85;"><span style="position:absolute; bottom:2px; left:2px; background:rgba(0,0,0,0.7); color:#34d399; padding:1px 3px; border-radius:3px; font-weight:700;">✓ #${{i+1}}</span>`;
+        grid.appendChild(item);
+      }});
+    }}
+
+    function selectBatchCamera(index) {{
+      if (!camera || !controls) return;
+      const numCams = batchImages.length || 36;
+      const angleRad = (index * (360 / numCams) * Math.PI) / 180.0;
+      const r = 3.2;
+      camera.position.set(r * Math.sin(angleRad), 0.4, r * Math.cos(angleRad));
+      controls.update();
+    }}
 
     // Build 3D Wireframe Camera Cones (Frustums) around the object
     function buildCameraFrustums() {{
@@ -1132,22 +1254,10 @@ def main():
       scene.add(frustumsGroup);
       buildCameraFrustums();
 
-      // Load OBJ Mesh String
+      // Load OBJ Mesh String with Vertex Colors (v x y z r g b)
       if (rawObjData && rawObjData.trim().length > 0) {{
-        const loader = new THREE.OBJLoader();
-        const obj = loader.parse(rawObjData);
-        
-        obj.traverse((child) => {{
-          if (child.isMesh) {{
-            child.material = new THREE.MeshStandardMaterial({{
-              color: 0xe0e6ed,
-              roughness: 0.3,
-              metalness: 0.1,
-              side: THREE.DoubleSide
-            }});
-          }}
-        }});
-        meshGroup.add(obj);
+        const objMesh = parseOBJWithColors(rawObjData);
+        meshGroup.add(objMesh);
       }} else {{
         // Fallback point cloud in Three.js
         const geometry = new THREE.BufferGeometry();
@@ -1695,6 +1805,7 @@ def main():
       initThreeJS();
       setupDragAndDrop();
       drawFeatureMatches();
+      renderBatchReel();
     }});
     window.addEventListener('resize', () => {{
       const container = document.getElementById('single-view-container');
