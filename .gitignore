@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.coverage.*
+
+# Environments and IDEs
+.venv/
+env/
+venv/
+ENV/
+.idea/
+.vscode/
+.DS_Store
+
+# Datasets and Media Files
+imgaes/
+imgaes_apple_video/
+imgaes_new_input_frames/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Output models, trained checkpoints, renders, mesh exports
+output_apple_video_3dmodel/
+output_cuda_apple/
+output_new_input_3dmodel/
+output_reconstruction/
+output_*/
+*.ply
+*.splat
+*.obj
+*.glb
+*.gltf
+*.pth
+*.pt
+*.ckpt
+
+# Upstream archives and unzipped vendor folders
+gaussian-splatting-main.zip
+gaussian-splatting-main/
+
+# Scratch & temporary scripts
+scratch_*

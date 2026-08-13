@@ -1,0 +1,28 @@
+# Requirements for Next-Generation 3D Gaussian Splatting System
+# Install with: pip install -r requirements.txt
+
+# Core ML / tensor
+torch>=2.1.0            # Tested with 2.1+ (CUDA 12.x)
+torchvision>=0.16.0
+
+# 3D / point cloud
+plyfile>=0.9            # PLY format I/O (Gaussian .ply files)
+numpy>=1.24.0
+
+# Image I/O
+Pillow>=10.0.0
+imageio>=2.33.0         # Video export
+imageio-ffmpeg>=0.4.9   # FFmpeg backend for imageio
+
+# Visualization / UI
+matplotlib>=3.8.0       # Interactive viewer
+
+# Progress
+tqdm>=4.66.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Optional: faster nearest neighbors for large point clouds
+# faiss-gpu>=1.7.4      # Uncomment if you have FAISS installed
