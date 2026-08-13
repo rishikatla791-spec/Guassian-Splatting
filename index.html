@@ -572,7 +572,7 @@
     <div class="top-actions">
       <button class="btn" onclick="captureSnapshot()">📸 Snapshot</button>
       <button class="btn" onclick="toggleAutoTurntable()">🔄 Auto Orbit</button>
-      <button class="btn" style="background:linear-gradient(135deg, #10b981, #059669); color:white; border:none;" onclick="switchTab('tab-hulk', document.querySelectorAll('.tab-btn')[3])">💥 HULK SMASH 3D</button>
+      <button class="btn" style="background:linear-gradient(135deg, #10b981, #059669); color:white; border:none;" onclick="switchTab('tab-hulk')">💥 HULK SMASH 3D</button>
       <a class="btn" href="file:///C:/Users/Rishi/Downloads/gaussian/output_apple_video_3dmodel/apple_3d_model.obj" download="apple_3d_model.obj">📥 OBJ Mesh</a>
       <a class="btn primary" href="file:///C:/Users/Rishi/Downloads/gaussian/output_apple_video_3dmodel/point_cloud/iteration_500/point_cloud.ply" download="point_cloud.ply">📥 PLY Splats</a>
     </div>
@@ -1278,35 +1278,74 @@
       });
     }
 
-    // Tab Switching
+    // Tab Switching (Null-Safe)
     function switchTab(tabId, btn) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById(tabId).classList.add('active');
+
+      const targetTab = document.getElementById(tabId);
+      if (targetTab) targetTab.classList.add('active');
+
+      if (btn && btn.classList) {
+        btn.classList.add('active');
+      } else {
+        const matchingBtn = document.querySelector(`.tab-btn[onclick*="${tabId}"]`);
+        if (matchingBtn && matchingBtn.classList) matchingBtn.classList.add('active');
+      }
     }
 
-    // Mode Switching
+    // Mode Switching (Null-Safe)
     function setMode(mode) {
       currentMode = mode;
       document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('active'));
-      document.getElementById(`mode-${mode}`).classList.add('active');
+      const activeCard = document.getElementById('mode-' + mode);
+      if (activeCard) activeCard.classList.add('active');
 
       const threeCanvas = document.getElementById('threejs-canvas');
       const splatCanvas = document.getElementById('splat-canvas');
       const photoView   = document.getElementById('photo-view');
       const titleEl     = document.getElementById('active-mode-title');
 
-      threeCanvas.style.display = (mode === 'three') ? 'block' : 'none';
-      splatCanvas.style.display = (mode === 'splat') ? 'block' : 'none';
-      photoView.style.display   = (mode === 'photo') ? 'block' : 'none';
+      if (threeCanvas) threeCanvas.style.display = (mode === 'three' || mode === 'split') ? 'block' : 'none';
+      if (splatCanvas) splatCanvas.style.display = (mode === 'splat' || mode === 'split') ? 'block' : 'none';
+      if (photoView)   photoView.style.display   = (mode === 'photo') ? 'block' : 'none';
 
-      if (mode === 'three') titleEl.innerText = 'Interactive 3D Surface Mesh';
-      if (mode === 'splat') {
-        titleEl.innerText = 'Differentiable 3D Gaussian Splats';
-        renderSharpSplats();
+      if (threeCanvas && mode === 'split') {
+        threeCanvas.style.width = '50%';
+        splatCanvas.style.width = '50%';
+      } else if (threeCanvas && splatCanvas) {
+        threeCanvas.style.width = '100%';
+        splatCanvas.style.width = '100%';
       }
-      if (mode === 'photo') titleEl.innerText = 'High-Res Reference RGB Photograph';
+
+      if (titleEl) {
+        if (mode === 'three') titleEl.innerText = 'Interactive 3D Surface Mesh';
+        if (mode === 'splat') titleEl.innerText = 'Differentiable 3D Gaussian Splats';
+        if (mode === 'split') titleEl.innerText = 'Dual Mode: Mesh (Left) | Splats (Right)';
+        if (mode === 'photo') titleEl.innerText = 'High-Res Reference RGB Photograph';
+      }
+
+      if (mode === 'splat' || mode === 'split') renderSharpSplats();
+    }
+
+    // 3D Volume Slicer Update
+    function updateSlicer() {
+      const enabledEl = document.getElementById('slicer-enable');
+      const enabled = enabledEl ? enabledEl.checked : false;
+      const sx = document.getElementById('slice-x') ? parseFloat(document.getElementById('slice-x').value) : 1.0;
+      const sy = document.getElementById('slice-y') ? parseFloat(document.getElementById('slice-y').value) : 1.0;
+      const sz = document.getElementById('slice-z') ? parseFloat(document.getElementById('slice-z').value) : 1.0;
+
+      if (document.getElementById('slice-x-val')) document.getElementById('slice-x-val').innerText = (sx >= 0 ? '+' : '') + sx.toFixed(2);
+      if (document.getElementById('slice-y-val')) document.getElementById('slice-y-val').innerText = (sy >= 0 ? '+' : '') + sy.toFixed(2);
+      if (document.getElementById('slice-z-val')) document.getElementById('slice-z-val').innerText = (sz >= 0 ? '+' : '') + sz.toFixed(2);
+
+      if (renderer) renderer.localClippingEnabled = enabled;
+    }
+
+    function toggleFeatureMatches(show) {
+      const canvas = document.getElementById('feature-canvas');
+      if (canvas) canvas.style.display = show ? 'block' : 'none';
     }
 
     // Orbit Selection
