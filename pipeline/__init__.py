@@ -10,6 +10,7 @@ from .dense_geometry import DenseGeometryReconstructor
 from .validation_suite import ValidationSuite
 from .memory_optimizer import VRAMBudgetManager
 from .reconstruction_pipeline import ReconstructionPipeline
+from .single_image_triposr import SingleImageTripoSRPipeline
 
 __all__ = [
     "Scene",
@@ -21,4 +22,5 @@ __all__ = [
     "ValidationSuite",
     "VRAMBudgetManager",
     "ReconstructionPipeline",
+    "SingleImageTripoSRPipeline",
 ]

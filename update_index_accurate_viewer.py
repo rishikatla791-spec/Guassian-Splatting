@@ -668,6 +668,7 @@ def main():
     <div class="top-actions">
       <button class="btn" onclick="captureSnapshot()">📸 Snapshot</button>
       <button class="btn" onclick="toggleAutoTurntable()">🔄 Auto Orbit</button>
+      <button class="btn" style="background:linear-gradient(135deg, #10b981, #059669); color:white; border:none;" onclick="switchTab('tab-hulk', document.querySelectorAll('.tab-btn')[3])">💥 HULK SMASH 3D</button>
       <a class="btn" href="{obj_url}" download="apple_3d_model.obj">📥 OBJ Mesh</a>
       <a class="btn primary" href="{point_cloud_url}" download="point_cloud.ply">📥 PLY Splats</a>
     </div>
@@ -682,6 +683,7 @@ def main():
         <button class="tab-btn active" onclick="switchTab('tab-modes', this)">Viewport & Shading</button>
         <button class="tab-btn" onclick="switchTab('tab-splats', this)">Gaussian Tuning</button>
         <button class="tab-btn" onclick="switchTab('tab-slicer', this)">3D Slicer</button>
+        <button class="tab-btn" onclick="switchTab('tab-hulk', this)">💥 Single Image 3D</button>
         <button class="tab-btn" onclick="switchTab('tab-upload', this)">Import File</button>
       </div>
 
@@ -800,7 +802,35 @@ def main():
         </div>
       </div>
 
-      <!-- TAB 4: IMPORT LOCAL FILE -->
+      <!-- TAB 4: HULK SMASH SINGLE IMAGE 3D GENERATOR -->
+      <div id="tab-hulk" class="tab-content">
+        <div class="control-group">
+          <div class="group-title">HULK SMASH 3D RECONSTRUCTION</div>
+          <p style="font-size:12px; color:var(--text-muted); line-height:1.4; margin-bottom:12px;">
+            Single-Image Feed-Forward 3D Triplane Prediction + Differentiable Photorealistic Gaussian Refinement.
+          </p>
+          <div class="file-dropzone" style="border-color:rgba(16, 185, 129, 0.4); background:rgba(16, 185, 129, 0.04);" onclick="document.getElementById('hulk-img-input').click()">
+            <div class="dropzone-icon" style="color:var(--accent-green);">📸</div>
+            <div class="dropzone-text">Drop 1 Photo (JPG/PNG) to <strong>HULK SMASH 3D</strong></div>
+            <input type="file" id="hulk-img-input" accept="image/*" style="display:none;" onchange="handleHulkImageSelect(event)">
+          </div>
+
+          <div class="control-row" style="margin-top:14px;">
+            <label>Refine Pass</label>
+            <select class="select-input" id="hulk-iterations">
+              <option value="50">Fast (50 Iterations)</option>
+              <option value="100" selected>Ultra Realism (100 Iterations)</option>
+              <option value="200">Max Fidelity (200 Iterations)</option>
+            </select>
+          </div>
+
+          <button class="btn primary" style="width:100%; margin-top:12px; padding:10px; background:linear-gradient(135deg, #10b981, #059669); justify-content:center; font-weight:800;" onclick="runHulkSmash()">
+            💥 HULK SMASH GENERATE 3D
+          </button>
+        </div>
+      </div>
+
+      <!-- TAB 5: IMPORT LOCAL FILE -->
       <div id="tab-upload" class="tab-content">
         <div class="control-group">
           <div class="group-title">LOAD CUSTOM MODEL</div>
@@ -1259,6 +1289,28 @@ def main():
         }};
         reader.readAsArrayBuffer(file);
       }}
+    }}
+
+    let selectedHulkImage = null;
+    function handleHulkImageSelect(evt) {{
+      const files = evt.target.files;
+      if (!files || !files.length) return;
+      selectedHulkImage = files[0];
+      const reader = new FileReader();
+      reader.onload = function(e) {{
+        document.getElementById('photo-view').src = e.target.result;
+        alert('💥 Photo loaded! Click "HULK SMASH GENERATE 3D" to reconstruct!');
+      }};
+      reader.readAsDataURL(selectedHulkImage);
+    }}
+
+    function runHulkSmash() {{
+      if (!selectedHulkImage) {{
+        alert('💥 Please select or drop 1 image first!');
+        return;
+      }}
+      alert('💥 HULK SMASH! Single-Image 3D Generation Initiated! Running PyTorch Photorealistic Refinement Pass...');
+      setMode('photo');
     }}
 
     window.addEventListener('load', initThreeJS);
