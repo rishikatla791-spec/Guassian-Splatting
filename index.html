@@ -815,11 +815,12 @@
       <div class="card">
         <div class="card-header">
           <span>MODEL TELEMETRY</span>
+          <span id="stat-model-name" style="font-size:10px; color:var(--accent-cyan); overflow:hidden; text-overflow:ellipsis; white-max-width:110px;">Default Model</span>
         </div>
         <div style="font-size:12px; color:var(--text-muted); display:flex; flex-direction:column; gap:8px;">
           <div style="display:flex; justify-content:space-between;">
             <span>3D Gaussians Count</span>
-            <span style="font-family:'JetBrains Mono'; font-weight:700; color:var(--accent-cyan);">6,597</span>
+            <span id="stat-gaussian-count" style="font-family:'JetBrains Mono'; font-weight:700; color:var(--accent-cyan);">6,597</span>
           </div>
           <div style="display:flex; justify-content:space-between;">
             <span>Mesh Faces</span>
@@ -1159,65 +1160,261 @@
       link.click();
     }
 
+    // --- FULLY FUNCTIONAL FILE UPLOAD & DRAG-AND-DROP SYSTEM ---
+    function setupDragAndDrop() {
+      const dropzones = document.querySelectorAll('.file-dropzone');
+      const viewport  = document.querySelector('.viewport-main');
+
+      [...dropzones, viewport].forEach(elem => {
+        if (!elem) return;
+        elem.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          elem.style.borderColor = 'var(--accent-cyan)';
+        });
+
+        elem.addEventListener('dragleave', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          elem.style.borderColor = '';
+        });
+
+        elem.addEventListener('drop', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          elem.style.borderColor = '';
+          const files = e.dataTransfer.files;
+          if (files && files.length > 0) {
+            processUploadedFile(files[0]);
+          }
+        });
+      });
+    }
+
     function handleFileSelect(evt) {
       const files = evt.target.files;
-      if (!files || !files.length) return;
-      const file = files[0];
-      const reader = new FileReader();
+      if (files && files.length > 0) {
+        processUploadedFile(files[0]);
+      }
+    }
 
-      if (file.name.endsWith('.obj')) {
-        reader.onload = function(e) {
-          const loader = new THREE.OBJLoader();
-          const obj = loader.parse(e.target.result);
-          if (meshGroup) {
-            meshGroup.clear();
-            obj.traverse(child => {
-              if (child.isMesh) child.material = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.2 });
-            });
-            meshGroup.add(obj);
+    function handleHulkImageSelect(evt) {
+      const files = evt.target.files;
+      if (files && files.length > 0) {
+        processUploadedFile(files[0]);
+      }
+    }
+
+    function processUploadedFile(file) {
+      const fileName = file.name.toLowerCase();
+      console.log('Processing uploaded file:', fileName);
+
+      if (fileName.endsWith('.ply')) {
+        loadPlyFile(file);
+      } else if (fileName.endsWith('.obj')) {
+        loadObjFile(file);
+      } else if (file.type.startsWith('image/')) {
+        loadSingleImageTo3D(file);
+      } else {
+        alert('Unsupported file format! Please upload a .PLY, .OBJ, or Image (PNG/JPG).');
+      }
+    }
+
+    // 1. Load & Render PLY Files
+    function loadPlyFile(file) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const loader = new THREE.PLYLoader();
+        const geom = loader.parse(e.target.result);
+        geom.center();
+        geom.computeVertexNormals();
+
+        const positions = geom.attributes.position;
+        const colors = geom.attributes.color;
+        const numPts = positions.count;
+
+        // Rebuild gaussiansData array for Splat Engine
+        gaussiansData.length = 0;
+        for (let i = 0; i < numPts; i++) {
+          let r = 200, g = 200, b = 200;
+          if (colors) {
+            r = Math.round(colors.getX(i) * (colors.normalized ? 1 : 255));
+            g = Math.round(colors.getY(i) * (colors.normalized ? 1 : 255));
+            b = Math.round(colors.getZ(i) * (colors.normalized ? 1 : 255));
           }
-          setMode('three');
-        };
-        reader.readAsText(file);
-      } else if (file.name.endsWith('.ply')) {
-        reader.onload = function(e) {
-          const loader = new THREE.PLYLoader();
-          const geom = loader.parse(e.target.result);
-          geom.computeVertexNormals();
-          const mat = new THREE.PointsMaterial({ size: 0.03, vertexColors: true });
+          gaussiansData.push({
+            id: i,
+            pos: [positions.getX(i), positions.getY(i), positions.getZ(i)],
+            color: [r, g, b],
+            opacity: 1.0,
+            scale: 0.02
+          });
+        }
+
+        // Update Three.js Mesh Group
+        if (meshGroup) {
+          meshGroup.clear();
+          const mat = new THREE.PointsMaterial({
+            size: 0.03,
+            vertexColors: !!colors,
+            color: colors ? 0xffffff : 0x38bdf8
+          });
+          meshGroup.add(new THREE.Points(geom, mat));
+        }
+
+        // Update Telemetry
+        document.getElementById('stat-gaussian-count').innerText = numPts.toLocaleString();
+        document.getElementById('stat-model-name').innerText = file.name;
+        document.getElementById('splat-density').max = numPts;
+        document.getElementById('splat-density').value = numPts;
+        document.getElementById('splat-density-val').innerText = numPts.toLocaleString();
+
+        setMode('three');
+        alert('✅ Successfully loaded PLY Model: ' + file.name + ' (' + numPts.toLocaleString() + ' points)');
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // 2. Load & Render OBJ Files
+    function loadObjFile(file) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const loader = new THREE.OBJLoader();
+        const obj = loader.parse(e.target.result);
+        
+        // Center OBJ model
+        const box = new THREE.Box3().setFromObject(obj);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scale = 2.0 / (maxDim || 1.0);
+
+        obj.position.sub(center.multiplyScalar(scale));
+        obj.scale.set(scale, scale, scale);
+
+        let totalVerts = 0, totalFaces = 0;
+        obj.traverse(child => {
+          if (child.isMesh) {
+            child.material = new THREE.MeshStandardMaterial({
+              color: 0x38bdf8,
+              roughness: 0.3,
+              metalness: 0.1,
+              side: THREE.DoubleSide
+            });
+            totalVerts += child.geometry.attributes.position.count;
+            if (child.geometry.index) totalFaces += child.geometry.index.count / 3;
+          }
+        });
+
+        if (meshGroup) {
+          meshGroup.clear();
+          meshGroup.add(obj);
+        }
+
+        document.getElementById('stat-gaussian-count').innerText = totalVerts.toLocaleString();
+        document.getElementById('stat-model-name').innerText = file.name;
+
+        setMode('three');
+        alert('✅ Successfully loaded 3D OBJ Mesh: ' + file.name);
+      };
+      reader.readAsText(file);
+    }
+
+    // 3. Real-Time Single Image to 3D Pointcloud Generator (HULK SMASH)
+    function loadSingleImageTo3D(file) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const img = new Image();
+        img.onload = function() {
+          // Draw image to canvas to extract pixels
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const size = 128;
+          canvas.width = size;
+          canvas.height = size;
+          ctx.drawImage(img, 0, 0, size, size);
+
+          const imgData = ctx.getImageData(0, 0, size, size).data;
+          gaussiansData.length = 0;
+
+          const points = [];
+          const colors = [];
+
+          for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+              const idx = (y * size + x) * 4;
+              const r = imgData[idx];
+              const g = imgData[idx + 1];
+              const b = imgData[idx + 2];
+              const a = imgData[idx + 3];
+
+              // Skip dark background pixels
+              if (a < 50 || (r > 240 && g > 240 && b > 240)) continue;
+
+              const nx = (x - size / 2) / (size / 2);
+              const ny = -(y - size / 2) / (size / 2);
+              const r_sq = nx * nx + ny * ny;
+              if (r_sq > 1.0) continue;
+
+              const nz = Math.sqrt(Math.max(0.01, 1.0 - r_sq)) * 0.6;
+
+              points.push(nx * 0.8, ny * 0.8, nz * 0.8);
+              colors.push(r / 255.0, g / 255.0, b / 255.0);
+
+              // Back half mirror for 3D thickness
+              points.push(nx * 0.8, ny * 0.8, -nz * 0.8);
+              colors.push(r / 255.0, g / 255.0, b / 255.0);
+
+              gaussiansData.push({
+                id: gaussiansData.length,
+                pos: [nx * 0.8, ny * 0.8, nz * 0.8],
+                color: [r, g, b],
+                opacity: 1.0,
+                scale: 0.02
+              });
+            }
+          }
+
+          // Build Three.js Point Cloud
+          const geom = new THREE.BufferGeometry();
+          geom.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+          geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+          const mat = new THREE.PointsMaterial({ size: 0.035, vertexColors: true });
+          
           if (meshGroup) {
             meshGroup.clear();
             meshGroup.add(new THREE.Points(geom, mat));
           }
-          setMode('three');
-        };
-        reader.readAsArrayBuffer(file);
-      }
-    }
 
-    let selectedHulkImage = null;
-    function handleHulkImageSelect(evt) {
-      const files = evt.target.files;
-      if (!files || !files.length) return;
-      selectedHulkImage = files[0];
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        document.getElementById('photo-view').src = e.target.result;
-        alert('💥 Photo loaded! Click "HULK SMASH GENERATE 3D" to reconstruct!');
+          // Update UI
+          document.getElementById('photo-view').src = e.target.result;
+          document.getElementById('stat-gaussian-count').innerText = gaussiansData.length.toLocaleString();
+          document.getElementById('stat-model-name').innerText = 'HULK 3D: ' + file.name;
+          document.getElementById('splat-density').max = gaussiansData.length;
+          document.getElementById('splat-density').value = gaussiansData.length;
+
+          setMode('three');
+          alert('💥 HULK SMASH! Generated 3D Model from Photo: ' + file.name + ' (' + gaussiansData.length.toLocaleString() + ' 3D points)');
+        };
+        img.src = e.target.result;
       };
-      reader.readAsDataURL(selectedHulkImage);
+      reader.readAsDataURL(file);
     }
 
     function runHulkSmash() {
-      if (!selectedHulkImage) {
-        alert('💥 Please select or drop 1 image first!');
-        return;
+      const hulkInput = document.getElementById('hulk-img-input');
+      if (hulkInput.files && hulkInput.files.length > 0) {
+        processUploadedFile(hulkInput.files[0]);
+      } else {
+        document.getElementById('hulk-img-input').click();
       }
-      alert('💥 HULK SMASH! Single-Image 3D Generation Initiated! Running PyTorch Photorealistic Refinement Pass...');
-      setMode('photo');
     }
 
-    window.addEventListener('load', initThreeJS);
+    window.addEventListener('load', () => {
+      initThreeJS();
+      setupDragAndDrop();
+    });
     window.addEventListener('resize', () => {
       const container = document.getElementById('single-view-container');
       if (camera && renderer) {
