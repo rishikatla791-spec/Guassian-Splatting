@@ -706,30 +706,30 @@
         </div>
       </div>
 
-      <!-- TAB 4: HULK SMASH SINGLE IMAGE 3D GENERATOR -->
+      <!-- TAB 4: HULK SMASH MULTI-IMAGE 3D GENERATOR -->
       <div id="tab-hulk" class="tab-content">
         <div class="control-group">
-          <div class="group-title">HULK SMASH 3D RECONSTRUCTION</div>
+          <div class="group-title">HULK SMASH MULTI-IMAGE 3D RECONSTRUCTION</div>
           <p style="font-size:12px; color:var(--text-muted); line-height:1.4; margin-bottom:12px;">
-            Single-Image Feed-Forward 3D Triplane Prediction + Differentiable Photorealistic Gaussian Refinement.
+            Upload a bunch of photos (5 to 50+ images) for Multi-View PyTorch Differentiable 3D Gaussian Splatting & Mesh Reconstruction.
           </p>
           <div class="file-dropzone" style="border-color:rgba(16, 185, 129, 0.4); background:rgba(16, 185, 129, 0.04);" onclick="document.getElementById('hulk-img-input').click()">
             <div class="dropzone-icon" style="color:var(--accent-green);">📸</div>
-            <div class="dropzone-text">Drop 1 Photo (JPG/PNG) to <strong>HULK SMASH 3D</strong></div>
-            <input type="file" id="hulk-img-input" accept="image/*" style="display:none;" onchange="handleHulkImageSelect(event)">
+            <div class="dropzone-text">Drop a <strong>bunch of photos</strong> (JPG/PNG) to <strong>HULK SMASH 3D</strong></div>
+            <input type="file" id="hulk-img-input" multiple accept="image/*" style="display:none;" onchange="handleHulkImageSelect(event)">
           </div>
 
           <div class="control-row" style="margin-top:14px;">
             <label>Refine Pass</label>
             <select class="select-input" id="hulk-iterations">
-              <option value="50">Fast (50 Iterations)</option>
-              <option value="100" selected>Ultra Realism (100 Iterations)</option>
-              <option value="200">Max Fidelity (200 Iterations)</option>
+              <option value="100">Fast Multi-View (100 Iterations)</option>
+              <option value="300" selected>Ultra Realism (300 Iterations)</option>
+              <option value="1000">Max Fidelity (1,000 Iterations)</option>
             </select>
           </div>
 
           <button class="btn primary" style="width:100%; margin-top:12px; padding:10px; background:linear-gradient(135deg, #10b981, #059669); justify-content:center; font-weight:800;" onclick="runHulkSmash()">
-            💥 HULK SMASH GENERATE 3D
+            💥 HULK SMASH RECONSTRUCT BUNCH OF IMAGES
           </button>
         </div>
       </div>
