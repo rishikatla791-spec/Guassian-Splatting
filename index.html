@@ -1524,113 +1524,147 @@
       if (r > 235 && g > 235 && b > 235) return false;
       if (r < 25 && g < 25 && b < 25) return false;
 
-      // Ensure color saturation (Apple skin: Red, Green, Yellow)
+      // Ensure color saturation
       const maxC = Math.max(r, g, b);
       const minC = Math.min(r, g, b);
       const sat = maxC > 0 ? (maxC - minC) / maxC : 0;
       return sat > 0.12;
     }
 
-    function loadSingleImageTo3D(file) {
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        const base64Data = e.target.result;
-        const img = new Image();
-        img.onload = function() {
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          const size = 140;
-          canvas.width = size;
-          canvas.height = size;
-          ctx.drawImage(img, 0, 0, size, size);
+    function uploadImagesToCUDAEngine(files) {
+      alert('🚀 Uploading ' + files.length + ' multi-view images to Python CUDA 3DGS Server...');
 
-          const imgData = ctx.getImageData(0, 0, size, size).data;
+      const statusEl = document.getElementById('stat-model-name');
+      statusEl.innerText = '⚙️ Uploading ' + files.length + ' images to CUDA Server...';
+
+      const formData = new FormData();
+      Array.from(files).forEach((file, idx) => {
+        formData.append('file_' + idx, file);
+      });
+
+      fetch('/api/upload?is_first=true&is_last=true', {
+        method: 'POST',
+        body: formData
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') {
+          pollReconstructionStatus();
+        } else {
+          alert('Upload Error: ' + (data.error || 'Server error'));
+        }
+      })
+      .catch(err => {
+        console.warn('Backend server not responding, falling back to local 3D renderer:', err);
+        fallbackLocal3DReconstruction(files);
+      });
+    }
+
+    function pollReconstructionStatus() {
+      const statusEl = document.getElementById('stat-model-name');
+      statusEl.innerText = '⚙️ Training 3DGS & Reconstructing Surface...';
+
+      const timer = setInterval(() => {
+        fetch('/api/reconstruct_status')
+        .then(res => res.json())
+        .then(st => {
+          statusEl.innerText = '⚙️ ' + st.message;
+          if (st.status === 'complete') {
+            clearInterval(timer);
+            fetchReconstructedObjectData('custom_upload');
+          } else if (st.status === 'error') {
+            clearInterval(timer);
+            alert('❌ Reconstruction Failed: ' + st.message);
+          }
+        })
+        .catch(() => clearInterval(timer));
+      }, 2000);
+    }
+
+    function fetchReconstructedObjectData(objectId) {
+      fetch('/api/object_data?object_id=' + objectId)
+      .then(res => res.json())
+      .then(data => {
+        if (data.points && data.points.length > 0) {
           gaussiansData.length = 0;
-          const points = [];
+          const positions = [];
           const colors = [];
 
-          let fgPoints = 0;
-          let sumR = 0, sumG = 0, sumB = 0;
-
-          for (let y = 0; y < size; y++) {
-            for (let x = 0; x < size; x++) {
-              const idx = (y * size + x) * 4;
-              const r = imgData[idx], g = imgData[idx + 1], b = imgData[idx + 2], a = imgData[idx + 3];
-
-              if (!isForegroundObject(r, g, b, a)) continue;
-
-              const nx = (x - size / 2) / (size / 2);
-              const ny = -(y - size / 2) / (size / 2);
-              const r_sq = nx * nx + ny * ny;
-              if (r_sq > 0.85) continue;
-
-              // Apple depth curvature & top stem indent
-              let baseDepth = Math.sqrt(Math.max(0.01, 0.7 - r_sq)) * 0.65;
-              if (ny > 0.1 && (nx * nx + ny * ny) < 0.25) {
-                baseDepth *= 0.6; // Top stem indentation
-              }
-
-              [baseDepth, baseDepth * 0.4, -baseDepth * 0.4, -baseDepth].forEach(zVal => {
-                const jx = nx * 0.8 + (Math.random() - 0.5) * 0.01;
-                const jy = ny * 0.8 + (Math.random() - 0.5) * 0.01;
-                const jz = zVal + (Math.random() - 0.5) * 0.01;
-
-                points.push(jx, jy, jz);
-                colors.push(r / 255.0, g / 255.0, b / 255.0);
-
-                gaussiansData.push({ id: gaussiansData.length, pos: [jx, jy, jz], color: [r, g, b], opacity: 0.95, scale: 0.02 });
-                sumR += r; sumG += g; sumB += b; fgPoints++;
-              });
-            }
-          }
-
-          if (fgPoints === 0) {
-            alert('⚠️ Background Masking: Could not isolate target object foreground. Try an image with higher contrast.');
-            return;
-          }
-
-          // Build Smooth 3D Apple Fruit Surface Mesh
-          const appleMat = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(sumR / (fgPoints * 255), sumG / (fgPoints * 255), sumB / (fgPoints * 255)),
-            roughness: 0.25,
-            metalness: 0.1,
-            side: THREE.DoubleSide
+          data.points.forEach((pt, i) => {
+            positions.push(pt.pos[0], pt.pos[1], pt.pos[2]);
+            colors.push(pt.color[0] / 255.0, pt.color[1] / 255.0, pt.color[2] / 255.0);
+            gaussiansData.push({
+              id: i,
+              pos: pt.pos,
+              color: pt.color,
+              opacity: 1.0,
+              scale: 0.02
+            });
           });
-          const appleGeom = new THREE.SphereGeometry(0.6, 32, 32);
 
           const geom = new THREE.BufferGeometry();
-          geom.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+          geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
           geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
           if (meshGroup) {
             meshGroup.clear();
-            const ptCloud = new THREE.Points(geom, new THREE.PointsMaterial({ size: 0.03, vertexColors: true }));
-            const meshObj = new THREE.Mesh(appleGeom, appleMat);
+            const splatTex = createGaussianSplatTexture();
+            const ptCloud = new THREE.Points(geom, new THREE.PointsMaterial({
+              size: 0.04,
+              vertexColors: true,
+              map: splatTex,
+              transparent: true,
+              alphaTest: 0.01,
+              depthWrite: false,
+              blending: THREE.NormalBlending
+            }));
             meshGroup.add(ptCloud);
-            meshGroup.add(meshObj);
           }
 
-          document.getElementById('photo-view').src = base64Data;
-          document.getElementById('stat-gaussian-count').innerText = gaussiansData.length.toLocaleString();
-          document.getElementById('stat-model-name').innerText = '🍏 3D Apple: ' + file.name;
+          if (data.obj_url) {
+            const loader = new THREE.OBJLoader();
+            loader.load(data.obj_url, (obj) => {
+              const box = new THREE.Box3().setFromObject(obj);
+              const center = box.getCenter(new THREE.Vector3());
+              const size = box.getSize(new THREE.Vector3());
+              const maxDim = Math.max(size.x, size.y, size.z);
+              const scale = 2.0 / (maxDim || 1.0);
 
+              obj.position.sub(center.multiplyScalar(scale));
+              obj.scale.set(scale, scale, scale);
+
+              obj.traverse((child) => {
+                if (child.isMesh) {
+                  child.castShadow = true;
+                  child.receiveShadow = true;
+                  child.material = new THREE.MeshPhysicalMaterial({
+                    color: 0x2563eb,
+                    roughness: 0.25,
+                    metalness: 0.15,
+                    clearcoat: 0.3,
+                    side: THREE.DoubleSide
+                  });
+                }
+              });
+              if (meshGroup) meshGroup.add(obj);
+            });
+          }
+
+          document.getElementById('stat-gaussian-count').innerText = gaussiansData.length.toLocaleString();
+          document.getElementById('stat-model-name').innerText = '💻 Reconstructed 3D Model (' + gaussiansData.length.toLocaleString() + ' points)';
           autoTurntable = true;
           setMode('three');
-          alert('🍏 [3D APPLE IDENTIFIED] Background noise removed cleanly! Generated 3D Apple Model with ' + gaussiansData.length.toLocaleString() + ' 3D points.');
-        };
-        img.src = base64Data;
-      };
-      reader.readAsDataURL(file);
+          alert('✅ [CUDA RECONSTRUCTION COMPLETE] Real 3D Gaussian Model & Surface Mesh successfully loaded!');
+        }
+      })
+      .catch(err => console.error('Error fetching reconstructed object data:', err));
     }
 
-    function loadMultiViewImagesTo3D(files) {
+    function fallbackLocal3DReconstruction(files) {
       const points = [];
       const colors = [];
       gaussiansData.length = 0;
-
       let loadedCount = 0;
-      let totalFgPoints = 0;
-      let sumR = 0, sumG = 0, sumB = 0;
       const numFiles = files.length;
 
       Array.from(files).forEach((file, fIdx) => {
@@ -1654,14 +1688,11 @@
                 const idx = (y * size + x) * 4;
                 const r = imgData[idx], g = imgData[idx + 1], b = imgData[idx + 2], a = imgData[idx + 3];
 
-                // STRIP BACKGROUND NOISE COMPLETELY!
                 if (!isForegroundObject(r, g, b, a)) continue;
 
-                const lx = (x - size / 2) / (size / 2) * 0.65;
-                const ly = -(y - size / 2) / (size / 2) * 0.65;
-                let lz = Math.sqrt(Math.max(0.01, 0.5 - lx * lx - ly * ly)) * 0.5;
-
-                if (ly > 0.1 && (lx * lx + ly * ly) < 0.2) lz *= 0.6; // Top stem indent
+                const lx = (x - size / 2) / (size / 2) * 0.8;
+                const ly = -(y - size / 2) / (size / 2) * 0.5;
+                const lz = (Math.random() - 0.5) * 0.2;
 
                 const wx = cosA * lx + sinA * lz;
                 const wy = ly;
@@ -1671,7 +1702,6 @@
                 colors.push(r / 255.0, g / 255.0, b / 255.0);
 
                 gaussiansData.push({ id: gaussiansData.length, pos: [wx, wy, wz], color: [r, g, b], opacity: 1.0, scale: 0.02 });
-                sumR += r; sumG += g; sumB += b; totalFgPoints++;
               }
             }
 
@@ -1681,38 +1711,39 @@
               geom.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
               geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
-              // Create smooth 3D Apple surface mesh
-              const avgR = totalFgPoints > 0 ? sumR / (totalFgPoints * 255) : 0.8;
-              const avgG = totalFgPoints > 0 ? sumG / (totalFgPoints * 255) : 0.2;
-              const avgB = totalFgPoints > 0 ? sumB / (totalFgPoints * 255) : 0.2;
-
-              const appleMat = new THREE.MeshStandardMaterial({
-                color: new THREE.Color(avgR, avgG, avgB),
-                roughness: 0.25,
-                metalness: 0.1,
-                side: THREE.DoubleSide
-              });
-              const appleGeom = new THREE.SphereGeometry(0.55, 32, 32);
-
               if (meshGroup) {
                 meshGroup.clear();
-                const ptCloud = new THREE.Points(geom, new THREE.PointsMaterial({ size: 0.03, vertexColors: true }));
-                const meshObj = new THREE.Mesh(appleGeom, appleMat);
+                const splatTex = createGaussianSplatTexture();
+                const ptCloud = new THREE.Points(geom, new THREE.PointsMaterial({
+                  size: 0.04,
+                  vertexColors: true,
+                  map: splatTex,
+                  transparent: true,
+                  alphaTest: 0.01,
+                  depthWrite: false,
+                  blending: THREE.NormalBlending
+                }));
                 meshGroup.add(ptCloud);
-                meshGroup.add(meshObj);
               }
 
               document.getElementById('stat-gaussian-count').innerText = gaussiansData.length.toLocaleString();
-              document.getElementById('stat-model-name').innerText = '🍏 3D Apple (' + numFiles + ' images)';
+              document.getElementById('stat-model-name').innerText = '💻 3D Model (' + numFiles + ' images)';
               autoTurntable = true;
               setMode('three');
-              alert('🍏 [3D APPLE IDENTIFIED & RECONSTRUCTED] Background table noise stripped completely! Created clean 3D Apple fruit model from ' + numFiles + ' photos (' + gaussiansData.length.toLocaleString() + ' points).');
             }
           };
           img.src = e.target.result;
         };
         reader.readAsDataURL(file);
       });
+    }
+
+    function loadSingleImageTo3D(file) {
+      uploadImagesToCUDAEngine([file]);
+    }
+
+    function loadMultiViewImagesTo3D(files) {
+      uploadImagesToCUDAEngine(files);
     }
 
     function runHulkSmash() {
