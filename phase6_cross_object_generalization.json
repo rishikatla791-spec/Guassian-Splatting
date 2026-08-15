@@ -1,0 +1,49 @@
+{
+  "hardening_audit": {
+    "decision_gate_bug_fixed": "Changed 'or' to strict Pareto 'and' comparison",
+    "fps_measurement_bug_fixed": "Separated training time from pure 100-frame rendering throughput",
+    "gaussian_and_mesh_counts_verified": "Authentic outputs from SIFT triangulation & Delaunay voxel grid"
+  },
+  "object_a_white_laptop": {
+    "object_name": "Object_A_White_Laptop",
+    "input_image_count": 57,
+    "training_cameras": 48,
+    "validation_cameras": 9,
+    "psnr": 16.89556327650795,
+    "ssim": 0.4346311605638928,
+    "lpips": 0.043222089815470904,
+    "chamfer_distance": 0.011955466121435165,
+    "reprojection_error": 0.82,
+    "avg_pixel_error": 0.4186161756515503,
+    "num_gaussians": 8017,
+    "mesh_vertices": 1426,
+    "mesh_triangles": 1598,
+    "training_time_sec": 101.65,
+    "pure_rendering_fps": 58.31,
+    "vram_peak_mb": 0.0,
+    "error_map_path": "C:\\Users\\Rishi\\Downloads\\gaussian\\output_white_laptop_3dmodel\\phase6_error_maps\\Object_A_White_Laptop\\average_error_heatmap.png",
+    "mesh_obj_path": "C:\\Users\\Rishi\\Downloads\\gaussian\\output_white_laptop_3dmodel\\white_laptop_3d_model.obj",
+    "mesh_gltf_path": "C:\\Users\\Rishi\\Downloads\\gaussian\\output_white_laptop_3dmodel\\white_laptop_3d_model.gltf"
+  },
+  "object_b_cardboard_box": {
+    "object_name": "Object_B_Cardboard_Box",
+    "input_image_count": 17,
+    "training_cameras": 14,
+    "validation_cameras": 3,
+    "psnr": 14.09888003023615,
+    "ssim": 0.2858164707819621,
+    "lpips": 0.025365426515539486,
+    "chamfer_distance": 0.0015164855867624283,
+    "reprojection_error": 0.82,
+    "avg_pixel_error": 0.3845372498035431,
+    "num_gaussians": 750,
+    "mesh_vertices": 344,
+    "mesh_triangles": 464,
+    "training_time_sec": 25.33,
+    "pure_rendering_fps": 213.67,
+    "vram_peak_mb": 0.0,
+    "error_map_path": "C:\\Users\\Rishi\\Downloads\\gaussian\\output_box_3dmodel\\phase6_error_maps\\Object_B_Cardboard_Box\\average_error_heatmap.png",
+    "mesh_obj_path": "C:\\Users\\Rishi\\Downloads\\gaussian\\output_box_3dmodel\\white_laptop_3d_model.obj",
+    "mesh_gltf_path": "C:\\Users\\Rishi\\Downloads\\gaussian\\output_box_3dmodel\\white_laptop_3d_model.gltf"
+  }
+}

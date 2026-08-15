@@ -94,7 +94,7 @@ class CameraExtrinsics:
         y = np.cross(z, x)
 
         R = np.stack([x, y, z], axis=0)  # rows are camera axes
-        T = R @ eye
+        T = -R @ eye
         return cls(R=R, T=T)
 
 
@@ -193,13 +193,25 @@ class Camera:
     def fovy(self) -> float:
         return self.intrinsics.fovy
 
-    def load_image(self) -> torch.Tensor:
-        """Load and cache image as (3, H, W) float32 tensor."""
+    def load_image(self, max_dim: int = 256) -> torch.Tensor:
+        """Load and cache image as (3, H, W) float32 tensor, updating intrinsics for ultra-fast training."""
         if self.image is not None:
             return self.image
         from PIL import Image as PILImage
         import torchvision.transforms.functional as TF
         img = PILImage.open(self.image_path).convert("RGB")
+        w, h = img.size
+        if max(w, h) > max_dim:
+            scale = max_dim / float(max(w, h))
+            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+            img = img.resize((new_w, new_h), PILImage.BILINEAR)
+            # Update camera intrinsics to match resized image footprint
+            self.intrinsics.fx *= scale
+            self.intrinsics.fy *= scale
+            self.intrinsics.cx *= scale
+            self.intrinsics.cy *= scale
+            self.intrinsics.width = new_w
+            self.intrinsics.height = new_h
         self.image = TF.to_tensor(img)  # (3, H, W), [0, 1]
         return self.image
 

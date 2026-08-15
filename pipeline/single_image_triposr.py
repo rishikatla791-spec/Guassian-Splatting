@@ -21,10 +21,16 @@ import torch
 import torch.nn.functional as F
 from PIL import Image, ImageFilter
 
-from gaussian.core.camera import Camera, CameraIntrinsics, CameraExtrinsics
-from gaussian.core.gaussians import GaussianModel
-from gaussian.renderer.tile_rasterizer import TileBasedRasterizer
-from gaussian.training.loss import l1_loss, combined_loss
+try:
+    from core.camera import Camera, CameraIntrinsics, CameraExtrinsics
+    from core.gaussians import GaussianModel
+    from renderer.tile_rasterizer import TileBasedRasterizer
+    from training.loss import l1_loss, combined_loss
+except ImportError:
+    from ..core.camera import Camera, CameraIntrinsics, CameraExtrinsics
+    from ..core.gaussians import GaussianModel
+    from ..renderer.tile_rasterizer import TileBasedRasterizer
+    from ..training.loss import l1_loss, combined_loss
 
 
 class SingleImageTripoSRPipeline:

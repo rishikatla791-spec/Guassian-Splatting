@@ -35,7 +35,13 @@ from typing import Callable, Dict, List, Optional
 import torch
 import torch.optim as optim
 
-from ..core.gaussians import GaussianModel, get_expon_lr_func
+try:
+    from gaussian.core.gaussians import GaussianModel, get_expon_lr_func
+except ImportError:
+    try:
+        from core.gaussians import GaussianModel, get_expon_lr_func
+    except ImportError:
+        from ..core.gaussians import GaussianModel, get_expon_lr_func
 from .config import TrainingConfig
 from .loss import combined_loss, l1_loss, psnr as compute_psnr_fn
 
@@ -90,6 +96,14 @@ class GaussianTrainer:
         self.gaussians = gaussians
         self.scene_cameras = scene_cameras
         self.eval_cameras  = eval_cameras
+
+        # Pre-cache image tensors and scale intrinsics once before training
+        for cam in self.scene_cameras:
+            if hasattr(cam, 'load_image'):
+                cam.load_image()
+        for cam in self.eval_cameras:
+            if hasattr(cam, 'load_image'):
+                cam.load_image()
 
         cfg = self.config
         param_groups = [
@@ -227,7 +241,11 @@ class GaussianTrainer:
         loss.backward()
 
         # ── Densification statistics ───────────────────────────
-        if iteration < cfg.densify_until_iter:
+        densify_start = min(cfg.densify_from_iter, max(10, int(0.05 * cfg.iterations)))
+        densify_end   = min(cfg.densify_until_iter, max(50, int(0.80 * cfg.iterations)))
+        densify_freq  = max(5, min(cfg.densification_interval, max(5, int(0.02 * cfg.iterations))))
+
+        if iteration < densify_end:
             # Track max 2D radius per Gaussian
             gaussians.max_radii2D[visibility_filter] = torch.max(
                 gaussians.max_radii2D[visibility_filter],
@@ -238,8 +256,8 @@ class GaussianTrainer:
 
             # ── Densify / prune ───────────────────────
             if (
-                iteration > cfg.densify_from_iter and
-                iteration % cfg.densification_interval == 0
+                iteration > densify_start and
+                iteration % densify_freq == 0
             ):
                 scene_extent = self._estimate_scene_extent()
                 gaussians.densify_and_prune(

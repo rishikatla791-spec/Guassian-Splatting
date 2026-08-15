@@ -257,7 +257,13 @@ class GaussianRasterizer(torch.nn.Module):
         # ── 8. Sort visible Gaussians front-to-back ──────────────
         vis_idx = visible.nonzero(as_tuple=False).squeeze(-1)  # (M,)
         if vis_idx.numel() == 0:
-            dummy_grad = 0.0 * (means3d.sum() + opacities.sum() + sh.sum())
+            dummy_grad = 0.0 * (
+                means3d.sum() +
+                opacities.sum() +
+                (sh.sum() if sh is not None else 0.0) +
+                (scales.sum() if scales is not None else 0.0) +
+                (rotations.sum() if rotations is not None else 0.0)
+            )
             rendered  = cfg.bg[None, None, :].expand(H, W, 3) + dummy_grad
             depth_map = torch.zeros(H, W, device=device)
             return rendered, depth_map, radii

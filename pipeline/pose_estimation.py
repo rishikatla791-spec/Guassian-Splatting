@@ -22,7 +22,10 @@ import numpy as np
 import torch
 import cv2
 
-from ..core.camera import Camera, CameraIntrinsics, CameraExtrinsics
+try:
+    from gaussian.core.camera import Camera, CameraIntrinsics, CameraExtrinsics
+except ImportError:
+    from core.camera import Camera, CameraIntrinsics, CameraExtrinsics
 
 
 class PoseEstimator:
@@ -221,7 +224,6 @@ class PoseEstimator:
             intr = CameraIntrinsics(fx=f_approx, fy=f_approx, cx=cx, cy=cy, width=w, height=h)
             extr = CameraExtrinsics(R=R_cam, T=T_cam)
             cam = Camera(uid=i, intrinsics=intr, extrinsics=extr, image_path=str(image_paths[i]))
-            
             img_tensor = torch.from_numpy(imgs[i]).permute(2, 0, 1).float() / 255.0
             cam.original_image = img_tensor
             cameras.append(cam)

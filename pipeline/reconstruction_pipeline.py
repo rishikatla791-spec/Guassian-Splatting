@@ -21,9 +21,14 @@ from .background_masker import ObjectMaskGenerator
 from .dense_geometry import DenseGeometryReconstructor
 from .validation_suite import ValidationSuite
 from .memory_optimizer import VRAMBudgetManager
-from ..core.gaussians import GaussianModel
-from ..renderer import TileBasedRasterizer
-from ..training import GaussianTrainer, TrainingConfig
+try:
+    from gaussian.core.gaussians import GaussianModel
+    from gaussian.renderer import TileBasedRasterizer
+    from gaussian.training import GaussianTrainer, TrainingConfig
+except ImportError:
+    from core.gaussians import GaussianModel
+    from renderer import TileBasedRasterizer
+    from training import GaussianTrainer, TrainingConfig
 
 
 class ReconstructionPipeline:
@@ -38,14 +43,20 @@ class ReconstructionPipeline:
         self.sh_degree = config.get("sh_degree", 3)
         self.iterations = config.get("iterations", 15_000)
         self.backend_pref = config.get("backend", "auto")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "[CUDA ERROR] torch.cuda.is_available() returned False! "
+                "The pipeline MUST be executed with Python 3.12 CUDA environment:\n"
+                "  C:\\Users\\Rishi\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+            )
+        self.device = "cuda"
 
         # Initialize sub-modules
         self.pose_estimator = PoseEstimator(backend_preference=self.backend_pref)
         self.mask_generator = ObjectMaskGenerator()
         self.geometry_reconstructor = DenseGeometryReconstructor()
         self.validation_suite = ValidationSuite(device=self.device)
-        self.memory_manager = VRAMBudgetManager(max_vram_gb=5.2)
+        self.memory_manager = VRAMBudgetManager()
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -77,7 +88,8 @@ class ReconstructionPipeline:
         print("\n[Stage 5] Dense Geometry Reconstruction & Surface Normal Triangulation...")
         clean_pts, clean_cols, normals, knn_dist = self.geometry_reconstructor.process_point_cloud(
             points=raw_points3d,
-            colors=raw_colors3d
+            colors=raw_colors3d,
+            cameras=cameras
         )
 
         # Train/Test Split (85% Train / 15% Validation Holdout)
@@ -133,7 +145,10 @@ class ReconstructionPipeline:
         # STAGE 10: Real 3D Mesh Generation & Multi-Format Export (OBJ, GLTF, PLY Mesh)
         print("\n[Stage 10] Real 3D Surface Mesh Generation & Multi-Format Export (OBJ, GLTF, PLY)...")
         try:
-            from ..export_3d_mesh import export_all_formats
+            try:
+                from gaussian.export_3d_mesh import export_all_formats
+            except ImportError:
+                from export_3d_mesh import export_all_formats
             mesh_paths = export_all_formats(final_ply, self.output_dir)
             print(f"[OK] Generated Wavefront 3D OBJ model: {mesh_paths['obj']}")
             print(f"[OK] Generated 3D Polygonal PLY mesh:   {mesh_paths['ply_mesh']}")

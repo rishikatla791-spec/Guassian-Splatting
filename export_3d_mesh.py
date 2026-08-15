@@ -167,7 +167,7 @@ def reconstruct_surface_mesh(
             d23 = np.linalg.norm(v2 - v3, axis=1)
 
             max_edge = np.maximum.reduce([d01, d02, d03, d12, d13, d23])
-            alpha_thresh = voxel_size * 4.5
+            alpha_thresh = voxel_size * 2.0
             valid_tetras = tetras[max_edge <= alpha_thresh]
 
             if len(valid_tetras) > 0:
@@ -360,9 +360,9 @@ def export_all_formats(ply_input_path: str | Path, output_dir: str | Path) -> Di
     pts, colors, opacities, scales = load_gaussian_ply(ply_input_path)
     verts, v_cols, normals, faces = reconstruct_surface_mesh(pts, colors, opacities, scales)
 
-    obj_file = output_dir / "apple_3d_model.obj"
-    ply_mesh_file = output_dir / "apple_3d_mesh.ply"
-    gltf_file = output_dir / "apple_3d_model.gltf"
+    obj_file = output_dir / "white_laptop_3d_model.obj"
+    ply_mesh_file = output_dir / "white_laptop_3d_mesh.ply"
+    gltf_file = output_dir / "white_laptop_3d_model.gltf"
 
     export_obj(obj_file, verts, v_cols, normals, faces)
     export_ply_mesh(ply_mesh_file, verts, v_cols, normals, faces)

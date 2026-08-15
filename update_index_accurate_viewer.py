@@ -39,8 +39,8 @@ def main():
     # Pick the PLY file with the highest iteration number
     ply_file = sorted(all_plys, key=lambda p: int(p.parent.name.split("_")[-1]))[-1]
     new_input_dir = ply_file.parent.parent.parent
-    obj_file = new_input_dir / "apple_3d_model.obj"
-    gltf_file = new_input_dir / "apple_3d_model.gltf"
+    obj_file = new_input_dir / "white_laptop_3d_model.obj"
+    gltf_file = new_input_dir / "white_laptop_3d_model.gltf"
 
     pts, colors, opacities, scales = load_gaussian_ply(ply_path=ply_file)
     print(f"Loaded {len(pts):,} 3D Gaussians from {ply_file.name}")
@@ -727,7 +727,7 @@ def main():
       <button class="btn" onclick="captureSnapshot()">📸 Snapshot</button>
       <button class="btn" onclick="toggleAutoTurntable()">🔄 Auto Orbit</button>
       <button class="btn success" onclick="switchTab('tab-hulk', document.querySelectorAll('.tab-btn')[1])">💥 HULK SMASH 3D</button>
-      <a class="btn" href="{obj_url}" download="apple_3d_model.obj">📥 OBJ Mesh</a>
+      <a class="btn" href="{obj_url}" download="white_laptop_3d_model.obj">📥 OBJ Mesh</a>
       <a class="btn primary" href="{point_cloud_url}" download="point_cloud.ply">📥 PLY Splats</a>
     </div>
   </header>
@@ -1057,7 +1057,22 @@ def main():
     let autoTurntable = false;
     let frameCount = 0, lastFpsTime = performance.now();
 
-    // Init Three.js 3D Engine
+    function createGaussianSplatTexture() {{
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+      gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.85)');
+      gradient.addColorStop(0.7, 'rgba(255, 255, 255, 0.25)');
+      gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 64, 64);
+      return new THREE.CanvasTexture(canvas);
+    }}
+
+    // Init Three.js 3D Engine (Hyper-Realistic 3D Depth Engine)
     function initThreeJS() {{
       const container = document.getElementById('single-view-container');
       const canvas = document.getElementById('threejs-canvas');
@@ -1066,38 +1081,74 @@ def main():
       scene.background = new THREE.Color(0xf1f5f9);
 
       camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
-      camera.position.set(0, 0, 3.2);
+      camera.position.set(0, 0.4, 3.2);
 
-      renderer = new THREE.WebGLRenderer({{ canvas: canvas, antialias: true, preserveDrawingBuffer: true }});
+      renderer = new THREE.WebGLRenderer({{ canvas: canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' }});
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(container.clientWidth, container.clientHeight);
+      
+      // Hyper-Realism Tone Mapping & PCF Soft Shadows
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.25;
 
       controls = new THREE.OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
       controls.dampingFactor = 0.05;
 
-      // Lights for Light Theme
-      ambLight = new THREE.AmbientLight(0xffffff, 0.85);
+      // 3-Point Studio Lighting for Maximum 3D Depth
+      ambLight = new THREE.AmbientLight(0xffffff, 0.65);
       scene.add(ambLight);
 
-      dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
-      dirLight.position.set(3, 5, 4);
+      dirLight = new THREE.DirectionalLight(0xffffff, 1.25);
+      dirLight.position.set(5, 8, 5);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 2048;
+      dirLight.shadow.mapSize.height = 2048;
+      dirLight.shadow.bias = -0.0001;
       scene.add(dirLight);
+
+      const fillLight = new THREE.DirectionalLight(0x00f2fe, 0.55);
+      fillLight.position.set(-5, -2, -4);
+      scene.add(fillLight);
+
+      const rimLight = new THREE.DirectionalLight(0xffaa00, 0.7);
+      rimLight.position.set(0, 5, -6);
+      scene.add(rimLight);
+
+      // Contact Shadow Receiving Floor Plane
+      const planeGeo = new THREE.PlaneGeometry(12, 12);
+      const planeMat = new THREE.ShadowMaterial({{ opacity: 0.25 }});
+      const shadowPlane = new THREE.Mesh(planeGeo, planeMat);
+      shadowPlane.rotation.x = -Math.PI / 2;
+      shadowPlane.position.y = -0.8;
+      shadowPlane.receiveShadow = true;
+      scene.add(shadowPlane);
+
+      // 3D Depth Perspective Grid
+      const gridHelper = new THREE.GridHelper(8, 24, 0x2563eb, 0xcbd5e1);
+      gridHelper.position.y = -0.81;
+      scene.add(gridHelper);
 
       meshGroup = new THREE.Group();
       scene.add(meshGroup);
 
-      // Load OBJ Mesh
+      // Load OBJ Mesh with Advanced Physical PBR Shading
       if (rawObjData && rawObjData.trim().length > 0) {{
         const loader = new THREE.OBJLoader();
         const obj = loader.parse(rawObjData);
         
         obj.traverse((child) => {{
           if (child.isMesh) {{
-            child.material = new THREE.MeshStandardMaterial({{
+            child.castShadow = true;
+            child.receiveShadow = true;
+            child.material = new THREE.MeshPhysicalMaterial({{
               color: 0x2563eb,
-              roughness: 0.3,
-              metalness: 0.1,
+              roughness: 0.25,
+              metalness: 0.15,
+              clearcoat: 0.3,
+              clearcoatRoughness: 0.1,
               side: THREE.DoubleSide
             }});
           }}
@@ -1121,7 +1172,16 @@ def main():
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-        const material = new THREE.PointsMaterial({{ size: 0.03, vertexColors: true }});
+        const splatTexture = createGaussianSplatTexture();
+        const material = new THREE.PointsMaterial({{
+          size: 0.045,
+          vertexColors: true,
+          map: splatTexture,
+          transparent: true,
+          alphaTest: 0.01,
+          depthWrite: false,
+          blending: THREE.NormalBlending
+        }});
         meshGroup.add(new THREE.Points(geometry, material));
       }}
 

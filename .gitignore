@@ -19,19 +19,20 @@ ENV/
 .DS_Store
 
 # Datasets and Media Files
-imgaes/
-imgaes_apple_video/
-imgaes_new_input_frames/
+imgaes*/
+output images/
 *.mp4
 *.avi
 *.mov
 *.mkv
 
+# Temporary test / framework build dirs
+.claude/
+mcp-builder/
+webapp-testing/
+frontend-design/
+
 # Output models, trained checkpoints, renders, mesh exports
-output_apple_video_3dmodel/
-output_cuda_apple/
-output_new_input_3dmodel/
-output_reconstruction/
 output_*/
 *.ply
 *.splat

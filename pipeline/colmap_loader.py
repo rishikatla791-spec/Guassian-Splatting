@@ -29,7 +29,10 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from ..core.camera import Camera, CameraIntrinsics, CameraExtrinsics
+try:
+    from gaussian.core.camera import Camera, CameraIntrinsics, CameraExtrinsics
+except ImportError:
+    from core.camera import Camera, CameraIntrinsics, CameraExtrinsics
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 """
-VRAM & GPU Memory Manager for RTX 3050 6GB + 16GB System RAM.
+Dynamic VRAM & GPU Memory Manager with Runtime Hardware Auto-Detection.
 
 Provides proactive VRAM budget tracking, dynamic memory chunking,
 automatic garbage collection, mixed precision casting, and Structure of Arrays (SoA) layout.
+Adapts dynamically to whatever GPU hardware is detected at runtime.
 """
 
 from __future__ import annotations
@@ -15,29 +16,49 @@ from typing import Dict, Any, Optional, Tuple
 
 class VRAMManager:
     """
-    Proactive VRAM budget monitor and memory optimizer for GPU execution.
-
-    Target GPU: RTX 3050 6GB VRAM (Safety limit: ~5.0 GB peak allocation).
+    Hardware-Adaptive VRAM Budget Monitor and Performance Optimizer.
+    Automatically detects available GPU VRAM and adjusts execution bounds.
     """
 
-    def __init__(self, target_vram_gb: float = 5.0):
-        self.target_vram_bytes = int(target_vram_gb * (1024 ** 3))
+    def __init__(self, safe_fraction: float = 0.85):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.safe_fraction = safe_fraction
+
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(self.device)
+            self.total_vram_bytes = props.total_memory
+            self.total_vram_gb = props.total_memory / (1024 ** 3)
+            self.device_name = props.name
+        else:
+            self.total_vram_bytes = 0
+            self.total_vram_gb = 0.0
+            self.device_name = "CPU Only"
+
+        self.target_vram_bytes = int(self.total_vram_bytes * self.safe_fraction)
+        self.target_vram_gb = self.target_vram_bytes / (1024 ** 3)
 
     def get_vram_stats(self) -> Dict[str, float]:
         """
         Return current GPU VRAM statistics in MB.
         """
         if not torch.cuda.is_available():
-            return {"allocated_mb": 0.0, "reserved_mb": 0.0, "max_allocated_mb": 0.0}
+            return {
+                "allocated_mb": 0.0,
+                "reserved_mb": 0.0,
+                "max_allocated_mb": 0.0,
+                "total_vram_mb": 0.0,
+                "target_vram_mb": 0.0,
+            }
 
         return {
-            "allocated_mb": torch.cuda.memory_allocated() / (1024 ** 2),
-            "reserved_mb": torch.cuda.memory_reserved() / (1024 ** 2),
-            "max_allocated_mb": torch.cuda.max_memory_allocated() / (1024 ** 2),
+            "allocated_mb": torch.cuda.memory_allocated(self.device) / (1024 ** 2),
+            "reserved_mb": torch.cuda.memory_reserved(self.device) / (1024 ** 2),
+            "max_allocated_mb": torch.cuda.max_memory_allocated(self.device) / (1024 ** 2),
+            "total_vram_mb": self.total_vram_gb * 1024,
+            "target_vram_mb": self.target_vram_gb * 1024,
         }
 
-    def check_and_clean(self, threshold_fraction: float = 0.85) -> bool:
+    def check_and_clean(self, threshold_fraction: float = 0.90) -> bool:
         """
         Check if VRAM usage exceeds safety threshold; if so, run proactive cleanup.
 
@@ -47,7 +68,7 @@ class VRAMManager:
         if not torch.cuda.is_available():
             return False
 
-        current_bytes = torch.cuda.memory_allocated()
+        current_bytes = torch.cuda.memory_allocated(self.device)
         if current_bytes > self.target_vram_bytes * threshold_fraction:
             gc.collect()
             torch.cuda.empty_cache()
@@ -80,9 +101,12 @@ class VRAMManager:
 
         Returns tile_size in pixels (e.g. 16, 8, or 4).
         """
+        if not torch.cuda.is_available():
+            return 16
+
         pixels = image_height * image_width
         memory_footprint_est = num_gaussians * 236 + pixels * 64
 
-        if memory_footprint_est > self.target_vram_bytes * 0.7:
-            return 8  # Use smaller tiles for high memory pressure
+        if memory_footprint_est > self.target_vram_bytes * 0.75:
+            return 8  # Use smaller tile grid for high memory pressure
         return 16

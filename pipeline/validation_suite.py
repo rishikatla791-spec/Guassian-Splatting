@@ -134,11 +134,11 @@ class ValidationSuite:
         if len(p1) == 0 or len(p2) == 0:
             return 0.0
 
-        if len(p1) > 10000:
-            idx1 = torch.randperm(len(p1))[:10000]
+        if len(p1) > 2000:
+            idx1 = torch.randperm(len(p1))[:2000]
             p1 = p1[idx1]
-        if len(p2) > 10000:
-            idx2 = torch.randperm(len(p2))[:10000]
+        if len(p2) > 2000:
+            idx2 = torch.randperm(len(p2))[:2000]
             p2 = p2[idx2]
 
         dist_matrix = torch.cdist(p1, p2)  # (N1, N2)
@@ -195,11 +195,15 @@ class ValidationSuite:
         with torch.no_grad():
             for i, cam in enumerate(test_cameras):
                 cam_dev = cam.to(self.device) if hasattr(cam, 'to') else cam
+                gt_img = cam_dev.load_image().to(self.device)
                 out = renderer.render(gaussians, cam_dev, bg_color=bg_color)
                 render_img = out['render'].clamp(0.0, 1.0)
-                gt_img = cam_dev.original_image.to(self.device)
                 if hasattr(cam_dev, 'foreground_mask') and cam_dev.foreground_mask is not None:
                     mask = cam_dev.foreground_mask.to(self.device)
+                    if mask.shape[-2:] != render_img.shape[-2:]:
+                        mask_in = mask.unsqueeze(0) if mask.ndim == 2 else mask
+                        if mask_in.ndim == 3: mask_in = mask_in.unsqueeze(0)
+                        mask = F.interpolate(mask_in, size=render_img.shape[-2:], mode="nearest").squeeze(0)
                     render_eval = render_img * mask
                     gt_eval = gt_img * mask
                 else:

@@ -211,6 +211,7 @@ class TileBasedRasterizer:
         scale_modifier: float = 1.0,
         sh_degree: Optional[int] = None,
         override_colors: Optional[torch.Tensor] = None,
+        compute_alpha: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
         Render a full frame.
@@ -322,16 +323,19 @@ class TileBasedRasterizer:
         # alpha_map ≈ (rendered - bg) / (fg - bg).
         # A cleaner approach: alpha = 1 - T_final stored separately.
         # We compute it here as the sum of alpha weights.
-        alpha_map = _compute_alpha_map(
-            means2d=means2d[visible],
-            opacities=opacities[visible],
-            cov2d_inv=cov2d_inv[visible],
-            depths=depths[visible],
-            radii=radii[visible].float(),
-            H=H,
-            W=W,
-            tile_size=self.TILE_SIZE,
-        )
+        if compute_alpha:
+            alpha_map = _compute_alpha_map(
+                means2d=means2d[visible],
+                opacities=opacities[visible],
+                cov2d_inv=cov2d_inv[visible],
+                depths=depths[visible],
+                radii=radii[visible].float(),
+                H=H,
+                W=W,
+                tile_size=self.TILE_SIZE,
+            )
+        else:
+            alpha_map = torch.ones((H, W), device=device, dtype=means3d.dtype)
 
         return {
             "render":            rendered_chw,

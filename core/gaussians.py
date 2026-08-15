@@ -550,7 +550,7 @@ class GaussianModel(nn.Module):
 
             # Concatenate along first dimension (N dimension)
             new_data  = torch.cat([param.data.detach(), ext], dim=0)
-            new_param = nn.Parameter(new_data)
+            new_param = nn.Parameter(new_data, requires_grad=True)
 
             # Extend Adam state with zeros for new elements
             stored_state = optimizer.state.get(param)
@@ -588,7 +588,7 @@ class GaussianModel(nn.Module):
         for group in optimizer.param_groups:
             param = group["params"][0]
             name = group.get("name") or param_map.get(id(param))
-            new_param = nn.Parameter(param.data.detach()[keep])
+            new_param = nn.Parameter(param.data.detach()[keep], requires_grad=True)
 
             stored_state = optimizer.state.get(param)
             if stored_state is not None:
