@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import cv2
+from scipy.spatial import cKDTree
 
 
 class DenseGeometryReconstructor:
@@ -128,14 +129,13 @@ class DenseGeometryReconstructor:
         points: np.ndarray,
         colors: np.ndarray,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Remove statistical outliers based on mean KNN distance."""
+        """Remove statistical outliers based on mean KNN distance using fast cKDTree."""
         if len(points) < self.k_neighbors + 1:
             return points, colors
 
-        pts_t = torch.from_numpy(points).float()
-        dist_matrix = torch.cdist(pts_t, pts_t)
-        topk_dists, _ = torch.topk(dist_matrix, k=self.k_neighbors + 1, largest=False, dim=-1)
-        mean_dists = topk_dists[:, 1:].mean(dim=-1).numpy()
+        tree = cKDTree(points)
+        dists, _ = tree.query(points, k=self.k_neighbors + 1, workers=-1)
+        mean_dists = dists[:, 1:].mean(axis=-1)
 
         mu = np.mean(mean_dists)
         std = np.std(mean_dists)
@@ -146,14 +146,16 @@ class DenseGeometryReconstructor:
 
     def _compute_knn_distances(self, points: np.ndarray) -> np.ndarray:
         """Compute mean distance to k nearest neighbors for spatial scale initialization."""
-        pts_t = torch.from_numpy(points).float()
-        dist_matrix = torch.cdist(pts_t, pts_t)
-        topk_dists, _ = torch.topk(dist_matrix, k=self.k_neighbors + 1, largest=False, dim=-1)
-        mean_dists = topk_dists[:, 1:].mean(dim=-1).numpy()
+        if len(points) < self.k_neighbors + 1:
+            return np.full((len(points),), 0.05, dtype=np.float32)
+
+        tree = cKDTree(points)
+        dists, _ = tree.query(points, k=self.k_neighbors + 1, workers=-1)
+        mean_dists = dists[:, 1:].mean(axis=-1)
         return np.maximum(mean_dists, 1e-6)
 
     def _estimate_normals(self, points: np.ndarray) -> np.ndarray:
-        """Estimate surface normal vectors using local PCA covariance decomposition."""
+        """Estimate surface normal vectors using local PCA covariance decomposition via cKDTree."""
         N = len(points)
         normals = np.zeros((N, 3), dtype=np.float32)
 
@@ -161,12 +163,12 @@ class DenseGeometryReconstructor:
             normals[:, 1] = 1.0
             return normals
 
-        pts_t = torch.from_numpy(points).float()
-        dist_matrix = torch.cdist(pts_t, pts_t)
-        _, indices = torch.topk(dist_matrix, k=min(12, N), largest=False, dim=-1)
+        k = min(12, N)
+        tree = cKDTree(points)
+        _, indices = tree.query(points, k=k, workers=-1)
 
         for i in range(N):
-            neighbors = points[indices[i].numpy()]
+            neighbors = points[indices[i]]
             center = np.mean(neighbors, axis=0)
             cov = np.cov((neighbors - center).T)
             eigenvalues, eigenvectors = np.linalg.eigh(cov)

@@ -102,6 +102,9 @@ class TrainingConfig:
     densify_grad_threshold: float = 0.0002
     """Average 2D gradient magnitude threshold for split/clone."""
 
+    percent_dense: float = 0.01
+    """Percent of scene extent above which Gaussians are split rather than cloned."""
+
     min_opacity: float = 0.005
     """Prune Gaussians with sigmoid(opacity) < min_opacity."""
 

@@ -1,15 +1,13 @@
 """
-High-Performance CUDA-Accelerated Gaussian Rasterizer.
+CUDAGaussianRasterizer — High-Performance Differentiable CUDA Tile Rasterizer.
 
-Integrates CUDA GPU operations:
-  - 3D Covariance Construction on GPU
-  - 2D EWA Projection on GPU
-  - View-dependent SH evaluation on GPU
-  - Front-to-back GPU depth sorting
-  - Differentiable CUDA Tile Splatting & Alpha Compositing
-
-Ensures zero CPU-GPU data roundtripping for maximum performance and VRAM efficiency
-on NVIDIA RTX 3050 (6GB VRAM).
+Hardware-accelerated CUDA implementation matching official Inria 3D Gaussian Splatting:
+  - 3D Covariance Projection Σ = R S Sᵀ Rᵀ
+  - EWA 2D Covariance Projection Σ' = (J W Σ Wᵀ Jᵀ)[:2,:2] + 0.3 I₂
+  - Frustum Culling & 3σ Bounding Radius Filtering
+  - View-dependent Spherical Harmonics Evaluation (Degrees 0..3)
+  - Tile-based 16x16 CUDA alpha compositing with depth sorting
+  - Full end-to-end differentiable backpropagation
 """
 
 from __future__ import annotations
@@ -28,8 +26,8 @@ try:
         build_covariance_2d_cuda,
         invert_cov2d_cuda,
         compute_radius_cuda,
-        cuda_tile_rasterize,
     )
+    from ..core.cuda_rasterizer import cuda_rasterize
     from ..core.sh import eval_sh
     from ..core.math_utils import project_points, ndc_to_screen
 except (ImportError, ValueError):
@@ -39,15 +37,15 @@ except (ImportError, ValueError):
         build_covariance_2d_cuda,
         invert_cov2d_cuda,
         compute_radius_cuda,
-        cuda_tile_rasterize,
     )
+    from core.cuda_rasterizer import cuda_rasterize
     from core.sh import eval_sh
     from core.math_utils import project_points, ndc_to_screen
 
 
 class CUDAGaussianRasterizer(nn.Module):
     """
-    Full CUDA/GPU Differentiable Rasterizer for 3D Gaussian Splatting.
+    Differentiable C++/CUDA Gaussian Rasterizer for 3D Gaussian Splatting.
     """
 
     def __init__(self, raster_settings: RasterizationSettings) -> None:
@@ -56,34 +54,53 @@ class CUDAGaussianRasterizer(nn.Module):
 
     def forward(
         self,
-        means3d: torch.Tensor,              # (N, 3)
-        means2d: torch.Tensor,              # (N, 3) leaf proxy for gradient accum
-        sh: Optional[torch.Tensor],         # (N, K, 3)
+        means3d: torch.Tensor,                  # (N, 3)
+        means2d: torch.Tensor,                  # (N, 3) leaf proxy for gradient accum
+        sh: Optional[torch.Tensor],             # (N, K, 3)
         colors_precomp: Optional[torch.Tensor], # (N, 3)
-        opacities: torch.Tensor,            # (N, 1)
-        scales: Optional[torch.Tensor],     # (N, 3)
-        rotations: Optional[torch.Tensor],  # (N, 4)
-        cov3d_precomp: Optional[torch.Tensor],
+        opacities: torch.Tensor,                # (N, 1) or (N,)
+        scales: Optional[torch.Tensor],         # (N, 3)
+        rotations: Optional[torch.Tensor],      # (N, 4)
+        cov3d_precomp: Optional[torch.Tensor],  # (N, 6)
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         CUDA-Accelerated rendering pipeline.
 
         Returns:
-            rendered_image: (H, W, 3) float32
+            rendered_image: (H, W, 3) float32 in [0, 1]
             depth_map:      (H, W) float32
             radii:          (N,) int64 bounding radii
         """
         cfg = self.raster_settings
-        device = means3d.device
         N = means3d.shape[0]
         H, W = cfg.image_height, cfg.image_width
 
-        # Ensure all inputs are on GPU
+        device = means3d.device
         if device.type != "cuda":
-            # Direct CPU fallback if CUDA is not available on device
-            pass
+            if torch.cuda.is_available():
+                target_device = torch.device("cuda")
+                means3d = means3d.to(target_device)
+                means2d = means2d.to(target_device)
+                if sh is not None: sh = sh.to(target_device)
+                if colors_precomp is not None: colors_precomp = colors_precomp.to(target_device)
+                opacities = opacities.to(target_device)
+                if scales is not None: scales = scales.to(target_device)
+                if rotations is not None: rotations = rotations.to(target_device)
+                if cov3d_precomp is not None: cov3d_precomp = cov3d_precomp.to(target_device)
+                device = target_device
 
-        # ── 1. 3D Covariance on GPU ────────────────────────────────────
+        viewmatrix = cfg.viewmatrix.to(device)
+        projmatrix = cfg.projmatrix.to(device)
+        campos = cfg.campos.to(device)
+        bg = cfg.bg.to(device)
+
+        if N == 0:
+            rendered = bg[None, None, :].expand(H, W, 3)
+            depth_map = torch.zeros((H, W), device=device, dtype=torch.float32)
+            radii = torch.zeros(0, device=device, dtype=torch.int64)
+            return rendered, depth_map, radii
+
+        # ── 1. 3D Covariance ────────────────────────────────────
         if cov3d_precomp is not None:
             covs3d = cov3d_precomp
         else:
@@ -91,20 +108,21 @@ class CUDAGaussianRasterizer(nn.Module):
                 raise ValueError("Provide cov3d_precomp or (scales, rotations).")
             covs3d = build_covariance_3d_cuda(scales, cfg.scale_modifier, rotations)
 
-        # ── 2. EWA 2D Projection on GPU ─────────────────────────────
+        # ── 2. EWA 2D Projection ─────────────────────────────
         fovx = 2.0 * math.atan(cfg.tanfovx)
         fovy = 2.0 * math.atan(cfg.tanfovy)
 
         cov2d, t_cam = build_covariance_2d_cuda(
-            means3d, covs3d, cfg.viewmatrix, fovx, fovy, W, H
+            means3d, covs3d, viewmatrix, fovx, fovy, W, H
         )
 
-        # ── 3. Screen-space projection on GPU ─────────────────────────
-        ndc, depths = project_points(means3d, cfg.viewmatrix, cfg.projmatrix)
-        means2d_screen = ndc_to_screen(ndc, W, H) # (N, 2)
+        # ── 3. Screen-space projection ─────────────────────────
+        ndc, depths = project_points(means3d, viewmatrix, projmatrix)
+        means2d_screen = ndc_to_screen(ndc, W, H)  # (N, 2)
 
         # Connect to leaf means2d proxy for densification gradient tracking
-        means2d_connected = means2d_screen + 0.0 * means2d[:, :2]
+        # Both means3d (via means2d_screen) and means2d (viewspace_points) receive the exact screen-space gradient
+        means2d_connected = means2d_screen + (means2d[:, :2] - means2d[:, :2].detach())
 
         # ── 4. GPU Frustum culling & bounding radius ─────────────────────
         if not cfg.prefiltered:
@@ -123,44 +141,35 @@ class CUDAGaussianRasterizer(nn.Module):
         if colors_precomp is not None:
             colors = colors_precomp
         else:
-            dirs = means3d - cfg.campos.to(device)
+            dirs = means3d - campos
             dirs = F.normalize(dirs, p=2, dim=-1)
             colors = eval_sh(cfg.sh_degree, sh, dirs)
             colors = (colors + 0.5).clamp(min=0.0)
 
         # ── 6. Invert 2D covariances analytically on GPU ─────────────
-        cov2d_inv, _ = invert_cov2d_cuda(cov2d)
+        cov2d_inv_mat, _ = invert_cov2d_cuda(cov2d)  # (N, 2, 2)
+        # Extract [inv_00, inv_01, inv_11] as (N, 3)
+        cov2d_inv = torch.stack([
+            cov2d_inv_mat[:, 0, 0],
+            cov2d_inv_mat[:, 0, 1],
+            cov2d_inv_mat[:, 1, 1],
+        ], dim=-1)
 
-        # ── 7. GPU Front-to-back depth sort ─────────────────────────
-        vis_idx = visible.nonzero(as_tuple=False).squeeze(-1)
-        if vis_idx.numel() == 0:
-            dummy_grad = 0.0 * (means3d.sum() + opacities.sum() + (sh.sum() if sh is not None else 0.0))
-            rendered = cfg.bg[None, None, :].expand(H, W, 3) + dummy_grad
-            depth_map = torch.zeros(H, W, device=device)
-            return rendered, depth_map, radii
+        # Flatten opacities to (N,)
+        opac_1d = opacities.squeeze(-1) if opacities.dim() > 1 else opacities
 
-        vis_depths = depths[vis_idx]
-        sort_order = torch.argsort(vis_depths) # Ascending = front to back
-        sorted_idx = vis_idx[sort_order]
-
-        s_means  = means2d_connected[sorted_idx]
-        s_colors = colors[sorted_idx]
-        s_alpha  = opacities.squeeze(-1)[sorted_idx]
-        s_covinv = cov2d_inv[sorted_idx]
-        s_depths = vis_depths[sort_order]
-        s_radii  = radii.float()[sorted_idx]
-
-        # ── 8. Differentiable CUDA tile rasterization ────────────────
-        rendered, depth_map = cuda_tile_rasterize(
-            means2d=s_means,
-            colors=s_colors,
-            alphas=s_alpha,
-            cov2d_inv=s_covinv,
-            depths=s_depths,
-            radii=s_radii,
-            H=H, W=W,
-            bg=cfg.bg.to(device),
+        # ── 7. Differentiable CUDA Tile Rasterization ────────────────
+        out_color, out_depth, out_alpha = cuda_rasterize(
+            means2d=means2d_connected,
+            colors=colors,
+            opacities=opac_1d,
+            cov2d_inv=cov2d_inv,
+            depths=depths,
+            radii=radii.float(),
+            H=H,
+            W=W,
+            bg_color=bg,
             tile_size=16,
         )
 
-        return rendered, depth_map, radii
+        return out_color, out_depth, radii

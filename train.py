@@ -54,10 +54,11 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Add parent to path so 'gaussian' package is importable
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-
-    from gaussian.pipeline import Pipeline
+    sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        from pipeline import Pipeline
+    except ImportError:
+        from gaussian.pipeline import Pipeline
 
     images = args.images_path or str(Path(args.source_path).parent.parent / "images")
 

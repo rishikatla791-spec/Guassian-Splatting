@@ -241,35 +241,37 @@ class GaussianTrainer:
         loss.backward()
 
         # ── Densification statistics ───────────────────────────
-        densify_start = min(cfg.densify_from_iter, max(10, int(0.05 * cfg.iterations)))
-        densify_end   = min(cfg.densify_until_iter, max(50, int(0.80 * cfg.iterations)))
-        densify_freq  = max(5, min(cfg.densification_interval, max(5, int(0.02 * cfg.iterations))))
-
-        if iteration < densify_end:
+        if iteration < cfg.densify_until_iter:
             # Track max 2D radius per Gaussian
             gaussians.max_radii2D[visibility_filter] = torch.max(
                 gaussians.max_radii2D[visibility_filter],
                 radii[visibility_filter].float()
             )
-            # Accumulate 2D gradient norms
-            gaussians.add_densification_stats(viewspace_points, visibility_filter)
+            # Accumulate 2D gradient norms (scaled to NDC space matching official Inria backward.cu)
+            gaussians.add_densification_stats(
+                viewspace_points,
+                visibility_filter,
+                image_width=camera.width,
+                image_height=camera.height,
+            )
 
             # ── Densify / prune ───────────────────────
             if (
-                iteration > densify_start and
-                iteration % densify_freq == 0
+                iteration > cfg.densify_from_iter and
+                iteration % cfg.densification_interval == 0
             ):
                 scene_extent = self._estimate_scene_extent()
+                size_threshold = cfg.max_screen_size if iteration > cfg.opacity_reset_interval else None
                 gaussians.densify_and_prune(
                     max_grad=cfg.densify_grad_threshold,
                     min_opacity=cfg.min_opacity,
                     extent=scene_extent,
-                    max_screen_size=cfg.max_screen_size,
+                    max_screen_size=size_threshold,
                     optimizer=self.optimizer,
                 )
 
             # ── Opacity reset ───────────────────────────
-            if iteration % cfg.opacity_reset_interval == 0:
+            if iteration % cfg.opacity_reset_interval == 0 or (cfg.white_background and iteration == cfg.densify_from_iter):
                 gaussians.reset_opacity(self.optimizer)
 
         # ── Gradient clipping ───────────────────────────────
@@ -298,16 +300,20 @@ class GaussianTrainer:
         """
         Estimate scene spatial extent from camera positions.
         Used to scale densification thresholds.
-        Returns max camera-to-centroid distance.
         """
         if not self.scene_cameras:
             return 1.0
         centers = torch.stack([
             cam.camera_center for cam in self.scene_cameras
         ]).float()
-        centroid = centers.mean(dim=0)
-        dists = (centers - centroid).norm(dim=-1)
-        return float(dists.max().item())
+        if len(self.scene_cameras) > 1:
+            centroid = centers.mean(dim=0)
+            dists = (centers - centroid).norm(dim=-1)
+            extent = float(dists.max().item()) * 1.1
+            return max(extent, 1.0)
+        else:
+            dist = float(centers[0].norm().item())
+            return max(dist, 1.0)
 
     # ─────────────────────────────────────────────────────────────
     # Full training loop

@@ -74,10 +74,13 @@ def find_latest_ply(model_path: str) -> str:
 
 def main():
     args = parse_args()
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-
-    from gaussian.core.gaussians import GaussianModel
-    from gaussian.ui.viewer import GaussianViewer, render_360_video
+    sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        from core.gaussians import GaussianModel
+        from ui.viewer import GaussianViewer, render_360_video
+    except ImportError:
+        from gaussian.core.gaussians import GaussianModel
+        from gaussian.ui.viewer import GaussianViewer, render_360_video
 
     # Load model
     g = GaussianModel(sh_degree=args.sh_degree)

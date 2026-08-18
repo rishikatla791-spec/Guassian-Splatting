@@ -320,7 +320,8 @@ def build_covariance_2d(
     fy = image_height / (2.0 * math.tan(fovy / 2.0))
 
     tx, ty, tz = t[:, 0], t[:, 1], t[:, 2]
-    tz_safe = tz.clamp(min=near_threshold * 0.01)  # avoid divide-by-zero
+    # Safe positive depth mask to avoid gradient explosions for points behind camera
+    tz_safe = torch.where(tz > 0.1, tz, torch.ones_like(tz) * 10.0)
     tz_inv   = 1.0 / tz_safe
     tz_inv2  = tz_inv * tz_inv
 
@@ -447,8 +448,8 @@ def invert_cov2d(cov2d: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     a, b, c = cov2d[:, 0], cov2d[:, 1], cov2d[:, 2]
     det_raw = a * c - b * b
-    det = det_raw.clamp(min=1e-14)
-    det_inv = 1.0 / det
+    det_safe = torch.where(det_raw > 1e-6, det_raw, torch.ones_like(det_raw))
+    det_inv = 1.0 / det_safe
 
     cov2d_inv = torch.stack([
         c * det_inv,   -b * det_inv,
@@ -578,8 +579,9 @@ def project_points(
     full_proj = projmatrix @ viewmatrix     # (4, 4)
     clip = ph @ full_proj.T                 # (N, 4)
 
-    w = clip[:, 3:4].clamp(min=1e-6)
-    ndc = clip[:, :3] / w                   # (N, 3) NDC
+    w = clip[:, 3:4]
+    w_safe = torch.where(w > 0.1, w, torch.ones_like(w) * 10.0)
+    ndc = clip[:, :3] / w_safe                   # (N, 3) NDC
 
     # Camera-space depth from view transform only
     cam = ph @ viewmatrix.T                 # (N, 4)

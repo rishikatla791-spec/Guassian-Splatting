@@ -290,7 +290,12 @@ class TileBasedRasterizer:
         )
 
         # ---- GaussianRasterizer call (CUDA vs PyTorch Vectorized) ------------
-        if device.type == "cuda":
+        try:
+            from core.cuda_rasterizer import HAS_CUPY
+        except (ImportError, ValueError):
+            HAS_CUPY = False
+
+        if device.type == "cuda" and HAS_CUPY:
             rasterizer = CUDAGaussianRasterizer(settings)
         else:
             rasterizer = GaussianRasterizer(settings)

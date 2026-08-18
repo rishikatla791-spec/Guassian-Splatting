@@ -197,6 +197,9 @@ class Camera:
         """Load and cache image as (3, H, W) float32 tensor, updating intrinsics for ultra-fast training."""
         if self.image is not None:
             return self.image
+        if self.image_path is None:
+            self.image = torch.zeros((3, self.intrinsics.height, self.intrinsics.width), dtype=torch.float32)
+            return self.image
         from PIL import Image as PILImage
         import torchvision.transforms.functional as TF
         img = PILImage.open(self.image_path).convert("RGB")

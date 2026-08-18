@@ -2,9 +2,9 @@
 """
 Gaussian 3D Studio Enterprise Backend Server (server.py).
 
-Provides local HTTP API endpoints for Phase 7 Web Studio:
+Provides local HTTP API endpoints for Web Studio:
 - /api/experiments : Returns cross-object comparison & verification history
-- /api/object_data : Returns detailed metrics, error maps, & mesh URLs per object
+- /api/object_data : Returns detailed metrics, error maps, & mesh URLs per object (truck, white_laptop, box, custom_upload)
 - /api/images      : Returns multi-view image thumbnail URLs per object dataset
 - /api/upload      : Handles multi-view image uploads and triggers 3DGS pipeline
 - Serves index.html & static assets (OBJ, GLTF, PLY, images, JSONs)
@@ -18,12 +18,16 @@ import shutil
 import base64
 import mimetypes
 import threading
+import subprocess
 from pathlib import Path
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 root_dir = Path(__file__).resolve().parent
-sys.path.insert(0, str(root_dir.parent))
+sys.path.insert(0, str(root_dir))
+
+# Python with CUDA support
+CUDA_PYTHON_EXE = r"C:\Users\Rishi\anaconda3\envs\gaussian_cuda\python.exe"
 
 # Ensure custom mime types for 3D assets
 mimetypes.add_type("model/obj", ".obj")
@@ -44,7 +48,7 @@ def get_image_files(directory: Path):
 reconstruction_state = {
     "status": "idle",
     "message": "Ready for upload",
-    "active_object": "white_laptop"
+    "active_object": "truck"
 }
 
 def run_background_reconstruction(images_dir, output_dir, obj_name):
@@ -54,16 +58,48 @@ def run_background_reconstruction(images_dir, output_dir, obj_name):
         reconstruction_state["message"] = "Starting 3DGS Pose Estimation & Feature Triangulation..."
         reconstruction_state["active_object"] = obj_name
 
-        from pipeline.reconstruction_pipeline import ReconstructionPipeline
-        cfg = {
-            "images_path": str(images_dir),
-            "output_dir": str(output_dir),
-            "iterations": 300,
-        }
-        pipeline = ReconstructionPipeline(cfg)
-        
-        reconstruction_state["message"] = "Seeding Volumetric Visual Hull & GPU CUDA Training..."
-        pipeline.run_full_pipeline()
+        import torch
+        has_cuda = torch.cuda.is_available()
+
+        # If current Python does not have CUDA but Python 3.12 with CUDA is installed, delegate to it
+        if not has_cuda and Path(CUDA_PYTHON_EXE).exists():
+            print(f"[Server] Delegating reconstruction to CUDA environment: {CUDA_PYTHON_EXE}")
+            reconstruction_state["message"] = "Delegating to NVIDIA GPU CUDA Python 3.12 Engine..."
+            worker_code = f"""
+import sys
+from pathlib import Path
+root_dir = Path(r'{root_dir}')
+sys.path.insert(0, str(root_dir))
+
+from pipeline.reconstruction_pipeline import ReconstructionPipeline
+cfg = {{
+    'images_path': r'{images_dir}',
+    'output_dir': r'{output_dir}',
+    'iterations': 300,
+}}
+pipeline = ReconstructionPipeline(cfg)
+pipeline.run_full_pipeline()
+print('SUCCESS_RECONSTRUCTION')
+"""
+            res = subprocess.run(
+                [CUDA_PYTHON_EXE, "-c", worker_code],
+                cwd=str(root_dir),
+                capture_output=True,
+                text=True,
+            )
+            if res.returncode != 0:
+                err_msg = res.stderr.strip() or res.stdout.strip()
+                raise RuntimeError(err_msg)
+        else:
+            from pipeline.reconstruction_pipeline import ReconstructionPipeline
+            cfg = {
+                "images_path": str(images_dir),
+                "output_dir": str(output_dir),
+                "iterations": 300,
+            }
+            pipeline = ReconstructionPipeline(cfg)
+            reconstruction_state["message"] = "Seeding Volumetric Visual Hull & GPU CUDA Training..."
+            pipeline.run_full_pipeline()
 
         reconstruction_state["status"] = "complete"
         reconstruction_state["message"] = "3D Reconstruction Completed Successfully!"
@@ -142,6 +178,13 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         path = parsed.path
         query = parse_qs(parsed.query)
 
+        if path == "/favicon.ico":
+            self.send_response(200)
+            self.send_header("Content-Type", "image/x-icon")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
         if path == "/" or path == "/index.html":
             self.path = "/index.html"
             return SimpleHTTPRequestHandler.do_GET(self)
@@ -162,14 +205,20 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
 
         # Endpoint 2: Detailed dataset info per object
         if path == "/api/object_data":
-            obj_id = query.get("object_id", ["white_laptop"])[0]
+            obj_id = query.get("object_id", ["truck"])[0]
 
-            if obj_id == "custom_upload":
-                out_dir = root_dir / "output_custom_3dmodel" if (root_dir / "output_custom_3dmodel").exists() else root_dir / "output_white_laptop_3dmodel"
-                img_dir = root_dir / "imgaes_custom_upload" if (root_dir / "imgaes_custom_upload").exists() else root_dir / "imgaes_white_laptop_validated"
-                history_path = root_dir / "output_white_laptop_3dmodel" / "phase5_closed_loop_history.json"
-                refinement_path = root_dir / "output_white_laptop_3dmodel" / "phase4_refinement_metrics.json"
-                error_map_dir = root_dir / "output_white_laptop_3dmodel" / "phase6_error_maps" / "Object_A_White_Laptop"
+            if obj_id == "truck":
+                out_dir = root_dir / "output_truck_3dmodel"
+                img_dir = root_dir / "imgaes" / "truck" / "images"
+                history_path = None
+                refinement_path = None
+                error_map_dir = out_dir / "comparisons"
+            elif obj_id == "custom_upload":
+                out_dir = root_dir / "output_custom_3dmodel" if (root_dir / "output_custom_3dmodel").exists() else root_dir / "output_truck_3dmodel"
+                img_dir = root_dir / "imgaes_custom_upload" if (root_dir / "imgaes_custom_upload").exists() else root_dir / "imgaes" / "truck" / "images"
+                history_path = None
+                refinement_path = None
+                error_map_dir = out_dir / "comparisons"
             elif obj_id == "white_laptop":
                 out_dir = root_dir / "output_white_laptop_3dmodel"
                 img_dir = root_dir / "imgaes_white_laptop_validated"
@@ -200,13 +249,26 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                     rel_url = "/" + str(p.relative_to(root_dir)).replace("\\", "/")
                     error_maps.append({"name": p.name, "url": rel_url})
 
-            # Check exported models
-            obj_path = out_dir / "white_laptop_3d_model.obj"
-            gltf_path = out_dir / "white_laptop_3d_model.gltf"
-            ply_path = out_dir / "white_laptop_3d_mesh.ply"
+            # Check exported models (look for specific names or first available in out_dir)
+            obj_path = out_dir / f"{obj_id}_3d_model.obj"
+            if not obj_path.exists():
+                obj_files = list(out_dir.glob("*.obj"))
+                obj_path = obj_files[0] if obj_files else obj_path
+
+            gltf_path = out_dir / f"{obj_id}_3d_model.gltf"
+            if not gltf_path.exists():
+                gltf_files = list(out_dir.glob("*.gltf"))
+                gltf_path = gltf_files[0] if gltf_files else gltf_path
+
+            ply_path = out_dir / f"{obj_id}_3d_mesh.ply"
+            if not ply_path.exists():
+                ply_files = [f for f in out_dir.glob("*.ply") if "mesh" in f.name]
+                ply_path = ply_files[0] if ply_files else ply_path
 
             # Load 3D Point Cloud PLY points for dynamic Splatting WebGL viewer
-            ply_point_file = out_dir / "point_cloud" / "iteration_300" / "point_cloud.ply"
+            ply_point_file = out_dir / "point_cloud.ply"
+            if not ply_point_file.exists():
+                ply_point_file = out_dir / "point_cloud" / "iteration_300" / "point_cloud.ply"
             if not ply_point_file.exists():
                 ply_point_file = out_dir / "point_cloud" / "iteration_60" / "point_cloud.ply"
 
@@ -221,7 +283,9 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                     max_r = np.max(np.linalg.norm(pts_centered, axis=1)) or 1.0
                     pts_norm = pts_centered / max_r
 
-                    for i in range(len(pts_norm)):
+                    # Sample up to 6,000 points for WebGL responsiveness
+                    step = max(1, len(pts_norm) // 6000)
+                    for i in range(0, len(pts_norm), step):
                         r, g, b = (colors[i] * 255.0).astype(int).tolist()
                         px, py, pz = pts_norm[i].tolist()
                         points_data.append({
@@ -246,10 +310,12 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
 
         # Endpoint 3: Multi-view Image list
         if path == "/api/images":
-            obj_id = query.get("object_id", ["white_laptop"])[0]
+            obj_id = query.get("object_id", ["truck"])[0]
 
-            if obj_id == "custom_upload":
-                img_dir = root_dir / "imgaes_custom_upload" if (root_dir / "imgaes_custom_upload").exists() else root_dir / "imgaes_white_laptop_validated"
+            if obj_id == "truck":
+                img_dir = root_dir / "imgaes" / "truck" / "images"
+            elif obj_id == "custom_upload":
+                img_dir = root_dir / "imgaes_custom_upload" if (root_dir / "imgaes_custom_upload").exists() else root_dir / "imgaes" / "truck" / "images"
             elif obj_id == "white_laptop":
                 img_dir = root_dir / "imgaes_white_laptop_validated"
             else:
@@ -346,7 +412,7 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
 def run_server(port=8000):
     os.chdir(str(root_dir))
     server_address = ("", port)
-    httpd = HTTPServer(server_address, StudioRequestHandler)
+    httpd = ThreadingHTTPServer(server_address, StudioRequestHandler)
     print(f"\n=======================================================")
     print(f"[OK] Gaussian 3D Web Studio Server Running at http://localhost:{port}")
     print(f"=======================================================\n")
@@ -355,4 +421,3 @@ def run_server(port=8000):
 
 if __name__ == "__main__":
     run_server()
-

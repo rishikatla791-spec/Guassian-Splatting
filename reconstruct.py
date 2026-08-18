@@ -11,10 +11,12 @@ import argparse
 import sys
 from pathlib import Path
 
-# Add root directory to python path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
-from gaussian.pipeline import ReconstructionPipeline
+try:
+    from pipeline import ReconstructionPipeline
+except ImportError:
+    from gaussian.pipeline import ReconstructionPipeline
 
 
 def parse_args():

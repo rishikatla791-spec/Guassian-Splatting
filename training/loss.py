@@ -202,23 +202,15 @@ def dssim(
     return ssim_loss(pred, gt, **kwargs) * 0.5
 
 
-# ══════════════════════════════════════════════════════════════════
-# Combined Training Loss
-# ══════════════════════════════════════════════════════════════════
-
 def combined_loss(
     pred: torch.Tensor,
     gt: torch.Tensor,
     lambda_dssim: float = 0.2,
 ) -> torch.Tensor:
     """
-    Standard 3DGS combined loss (Kerbl et al. 2023):
+    Standard official 3DGS combined loss (Kerbl et al. 2023):
 
-        L = (1 - λ) · L1(pred, gt)  +  λ · DSSIM(pred, gt)
-
-    L1 encourages per-pixel accuracy.
-    DSSIM encourages structural/perceptual similarity.
-    λ = 0.2 is the default from the original paper.
+        L = (1 - λ) · L1(pred, gt)  +  λ · (1 - SSIM(pred, gt))
 
     Args:
         pred:         (3, H, W) or (B, 3, H, W) rendered image in [0, 1]
@@ -229,8 +221,8 @@ def combined_loss(
         scalar combined loss
     """
     l1 = l1_loss(pred, gt)
-    d  = dssim(pred, gt)
-    return (1.0 - lambda_dssim) * l1 + lambda_dssim * d
+    ssim_val = ssim_loss(pred, gt)
+    return (1.0 - lambda_dssim) * l1 + lambda_dssim * ssim_val
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -43,13 +43,13 @@ class ReconstructionPipeline:
         self.sh_degree = config.get("sh_degree", 3)
         self.iterations = config.get("iterations", 15_000)
         self.backend_pref = config.get("backend", "auto")
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                "[CUDA ERROR] torch.cuda.is_available() returned False! "
-                "The pipeline MUST be executed with Python 3.12 CUDA environment:\n"
-                "  C:\\Users\\Rishi\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
-            )
-        self.device = "cuda"
+        if torch.cuda.is_available():
+            self.device = "cuda"
+            print(f"[ReconstructionPipeline] Initialized on GPU CUDA: {torch.cuda.get_device_name(0)}")
+        else:
+            self.device = "cpu"
+            print("[ReconstructionPipeline] [Notice] Running on CPU. For fast GPU acceleration, use Python 3.12 with CUDA at C:\\Users\\Rishi\\AppData\\Local\\Programs\\Python\\Python312\\python.exe")
+
 
         # Initialize sub-modules
         self.pose_estimator = PoseEstimator(backend_preference=self.backend_pref)

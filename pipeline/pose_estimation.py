@@ -69,16 +69,22 @@ class PoseEstimator:
         colmap_res = None
         if self.preference in ["auto", "colmap"]:
             colmap_res = self._try_colmap(images_dir, colmap_sparse_dir)
+            if colmap_res is not None:
+                print(f"[OK] [Pose Estimation Selected]: 'COLMAP' | "
+                      f"Reprojection Error: {colmap_res['metrics']['reprojection_error']:.3f} px | "
+                      f"Points 3D: {len(colmap_res['points3d']):,} | "
+                      f"Coverage: {colmap_res['metrics']['coverage']*100:.1f}%")
+                return colmap_res["cameras"], colmap_res["points3d"], colmap_res["colors"], colmap_res["metrics"]
 
         # Option 2: DUSt3R / MASt3R check
         dust3r_res = None
         if self.preference in ["dust3r", "mast3r"]:
             dust3r_res = self._try_dust3r(image_paths)
+            if dust3r_res is not None:
+                return dust3r_res["cameras"], dust3r_res["points3d"], dust3r_res["colors"], dust3r_res["metrics"]
 
         # Option 3: Robust Feature Matcher (SIFT/ORB + RANSAC Essential Matrix + Bundle Adjustment)
         feature_res = self._run_feature_matching_sfm(image_paths)
-
-        # Evaluate and pick the backend with highest accuracy (lowest reprojection error & highest coverage)
         selected_backend = "feature_matching"
         selected_res = feature_res
 

@@ -159,37 +159,30 @@ class GaussianRasterizer(torch.nn.Module):
         rotations: Optional[torch.Tensor],
         cov3d_precomp: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Render a scene of 3D Gaussians.
-
-        Rendering pipeline:
-            1. Compute 3D covariance Σ = R S Sᵀ Rᵀ
-            2. Project to 2D: Σ' = J W Σ Wᵀ Jᵀ + 0.3 I (EWA)
-            3. Project centers to screen space
-            4. Frustum culling (remove behind-camera / far-OOB)
-            5. Compute bounding radii from √λ_max(Σ')
-            6. Evaluate view-dependent color via SH
-            7. Invert 2D covariances analytically
-            8. Sort visible Gaussians front-to-back by depth
-            9. Tile-based alpha compositing
-
-        Args:
-            means3d:       (N, 3) Gaussian centers in world space
-            means2d:       (N, 3) screen-space proxy tensor (leaf, requires_grad)
-            sh:            (N, K, 3) SH coefficients or None
-            colors_precomp:(N, 3) pre-computed RGB or None
-            opacities:     (N, 1) sigmoid-activated opacities
-            scales:        (N, 3) log-scale parameters
-            rotations:     (N, 4) unit quaternions
-            cov3d_precomp: (N, 6) pre-computed 3D covariance or None
-
-        Returns:
-            rendered_image: (H, W, 3) float32
-            depth_map:      (H, W) float32
-            radii:          (N,) int64 bounding radii
-        """
-        cfg    = self.raster_settings
         device = means3d.device
+        if device.type == "cuda":
+            try:
+                from core.cuda_rasterizer import HAS_CUPY
+                if HAS_CUPY:
+                    try:
+                        from .cuda_rasterizer import CUDAGaussianRasterizer
+                    except (ImportError, ValueError):
+                        from renderer.cuda_rasterizer import CUDAGaussianRasterizer
+                    cuda_rast = CUDAGaussianRasterizer(self.raster_settings)
+                    return cuda_rast(
+                        means3d=means3d,
+                        means2d=means2d,
+                        sh=sh,
+                        colors_precomp=colors_precomp,
+                        opacities=opacities,
+                        scales=scales,
+                        rotations=rotations,
+                        cov3d_precomp=cov3d_precomp,
+                    )
+            except Exception:
+                pass
+
+        cfg    = self.raster_settings
         N      = means3d.shape[0]
         H, W   = cfg.image_height, cfg.image_width
 
@@ -341,8 +334,8 @@ def _rasterize_tiles_vectorized(
     dtype  = means2d.dtype
     M      = means2d.shape[0]
 
-    # Output buffers
-    image     = bg[None, None, :].expand(H, W, 3).clone()   # (H, W, 3)
+    # Output buffers (clean non-mutating accumulators)
+    image     = torch.zeros(H, W, 3, device=device, dtype=dtype)
     T_buf     = torch.ones(H, W, device=device, dtype=dtype)
     depth_acc = torch.zeros(H, W, device=device, dtype=dtype)
 
@@ -361,97 +354,86 @@ def _rasterize_tiles_vectorized(
     tile_y_min = (aabb_y_min / tile_size).long()
     tile_y_max = (aabb_y_max / tile_size).long().clamp(max=n_tiles_y - 1)
 
-    # Iterate over tiles (outer loop; inner loop is vectorized)
-    for ty in range(n_tiles_y):
-        for tx in range(n_tiles_x):
-            py0 = ty * tile_size
-            px0 = tx * tile_size
-            py1 = min(py0 + tile_size, H)
-            px1 = min(px0 + tile_size, W)
-            ph  = py1 - py0
-            pw  = px1 - px0
+    tile_rows = []
+    tile_T_rows = []
+    tile_depth_rows = []
 
-            # Find Gaussians that overlap this tile
+    for ty in range(n_tiles_y):
+        row_colors = []
+        row_Ts = []
+        row_depths = []
+        py0 = ty * tile_size
+        py1 = min(py0 + tile_size, H)
+        ph  = py1 - py0
+        py_c = torch.arange(py0, py1, device=device, dtype=dtype) + 0.5
+
+        for tx in range(n_tiles_x):
+            px0 = tx * tile_size
+            px1 = min(px0 + tile_size, W)
+            pw  = px1 - px0
+            px_c = torch.arange(px0, px1, device=device, dtype=dtype) + 0.5
+
             tile_mask = (
                 (tile_x_min <= tx) & (tx <= tile_x_max) &
                 (tile_y_min <= ty) & (ty <= tile_y_max)
-            )  # (M,) bool
-            g_idx = tile_mask.nonzero(as_tuple=False).squeeze(-1)  # (G,)
+            )
+            g_idx = tile_mask.nonzero(as_tuple=False).squeeze(-1)
+
             if g_idx.numel() == 0:
+                row_colors.append(torch.zeros(ph, pw, 3, device=device, dtype=dtype))
+                row_Ts.append(torch.ones(ph, pw, device=device, dtype=dtype))
+                row_depths.append(torch.zeros(ph, pw, device=device, dtype=dtype))
                 continue
 
             G = g_idx.numel()
+            grid_y, grid_x = torch.meshgrid(py_c, px_c, indexing="ij")
+            pix = torch.stack([grid_x, grid_y], dim=-1)
 
-            # Pixel coordinate grid (half-pixel offset: centres at k+0.5)
-            py_c = torch.arange(py0, py1, device=device, dtype=dtype) + 0.5  # (ph,)
-            px_c = torch.arange(px0, px1, device=device, dtype=dtype) + 0.5  # (pw,)
-            grid_y, grid_x = torch.meshgrid(py_c, px_c, indexing="ij")       # (ph, pw) each
-            # pix: (ph, pw, 2) — [x, y] pixel centres
-            pix = torch.stack([grid_x, grid_y], dim=-1)  # (ph, pw, 2)
+            g_means  = means2d[g_idx]
+            g_colors = colors[g_idx]
+            g_alpha  = alphas[g_idx]
+            g_covinv = cov2d_inv[g_idx]
+            g_depths = depths[g_idx]
 
-            # Gather per-Gaussian data for this tile
-            g_means  = means2d[g_idx]    # (G, 2)
-            g_colors = colors[g_idx]     # (G, 3)
-            g_alpha  = alphas[g_idx]     # (G,)
-            g_covinv = cov2d_inv[g_idx]  # (G, 2, 2)
-            g_depths = depths[g_idx]     # (G,)
+            d = pix.unsqueeze(0) - g_means[:, None, None, :]
+            d_flat  = d.reshape(G, ph * pw, 2)
+            tmp     = torch.bmm(d_flat, g_covinv)
+            maha2   = (tmp * d_flat).sum(dim=-1).reshape(G, ph, pw)
 
-            # ─ Vectorized Mahalanobis distance computation ─
-            # d: (G, ph, pw, 2) — pixel-to-mean offsets
-            d = pix.unsqueeze(0) - g_means[:, None, None, :]  # (G, ph, pw, 2)
+            gauss_w = torch.exp(-0.5 * maha2.clamp(min=0.0, max=25.0))
+            eff_alpha = (g_alpha[:, None, None] * gauss_w).clamp(min=0.0, max=0.99)
 
-            # Mahalanobis²: dᵀ Σ⁻¹ d for each (Gaussian, pixel)
-            # Method: einsum for correctness and numerical precision
-            # d:       (G, ph, pw, 2)
-            # g_covinv:(G, 2, 2)
-            # result:  (G, ph, pw)
-            d_flat  = d.reshape(G, ph * pw, 2)               # (G, P, 2)
-            # tmp = d_flat @ g_covinv: (G, P, 2)
-            tmp     = torch.bmm(d_flat, g_covinv)            # (G, P, 2)
-            maha2   = (tmp * d_flat).sum(dim=-1)             # (G, P) dot product
-            maha2   = maha2.reshape(G, ph, pw)               # (G, ph, pw)
+            color_tile = torch.zeros(ph, pw, 3, device=device, dtype=dtype)
+            depth_tile = torch.zeros(ph, pw, device=device, dtype=dtype)
+            T_tile     = torch.ones(ph, pw, device=device, dtype=dtype)
 
-            # Gaussian weights: exp(-½ D²), clamped for numerical stability
-            gauss_w = torch.exp(-0.5 * maha2.clamp(max=20.0))  # (G, ph, pw)
-
-            # Effective alpha: σ_i · exp(-½ D²)
-            eff_alpha = (g_alpha[:, None, None] * gauss_w).clamp(max=1.0 - 1e-5)  # (G, ph, pw)
-
-            # ─ Tile-local buffers ─
-            T_tile     = T_buf[py0:py1, px0:px1].clone()     # (ph, pw)
-            color_tile = image[py0:py1, px0:px1].clone()     # (ph, pw, 3)
-            depth_tile = depth_acc[py0:py1, px0:px1].clone() # (ph, pw)
-
-            # ─ Front-to-back compositing (Gaussians already sorted) ─
-            # Process Gaussians one by one (sequential for correctness)
-            # but pixel dimension is fully vectorized
             for gi in range(G):
-                # Skip if all pixels in tile are fully covered
-                if T_tile.max().item() < T_threshold:
+                if T_tile.max() < T_threshold:
                     break
-
-                ea = eff_alpha[gi]                           # (ph, pw)
-
-                # Skip Gaussians with negligible contribution
+                ea = eff_alpha[gi]
                 if (ea > alpha_threshold).any():
-                    weight = ea * T_tile                     # (ph, pw) = α_i · T_i
-
-                    # Accumulate color: C += c_i · α_i · T_i
+                    weight = ea * T_tile
                     color_tile = color_tile + weight.unsqueeze(-1) * g_colors[gi][None, None, :]
-
-                    # Accumulate depth
                     depth_tile = depth_tile + weight * g_depths[gi]
-
-                    # Update transmittance: T_{i+1} = T_i · (1 - α_i)
                     T_tile = T_tile * (1.0 - ea)
 
-            # Write tile results back to full-image buffers
-            image[py0:py1, px0:px1]     = color_tile
-            T_buf[py0:py1, px0:px1]     = T_tile
-            depth_acc[py0:py1, px0:px1] = depth_tile
+            row_colors.append(color_tile)
+            row_Ts.append(T_tile)
+            row_depths.append(depth_tile)
 
-    # Final depth normalization: D = depth_acc / (1 - T_final)
-    alpha_acc = (1.0 - T_buf).clamp(min=1e-8)  # (H, W)
+        tile_rows.append(torch.cat(row_colors, dim=1))
+        tile_T_rows.append(torch.cat(row_Ts, dim=1))
+        tile_depth_rows.append(torch.cat(row_depths, dim=1))
+
+    image = torch.cat(tile_rows, dim=0)
+    T_buf = torch.cat(tile_T_rows, dim=0)
+    depth_acc = torch.cat(tile_depth_rows, dim=0)
+
+    # Final background blending: C_final = C_splats + T_final * C_bg
+    image = image + T_buf.unsqueeze(-1) * bg[None, None, :]
+
+    # Final depth normalization
+    alpha_acc = (1.0 - T_buf).clamp(min=1e-6)
     depth_map = depth_acc / alpha_acc
 
-    return image, depth_map
+    return image.clamp(0.0, 1.0), depth_map

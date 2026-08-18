@@ -55,20 +55,20 @@ class PointCloud:
 
     def remove_statistical_outliers(self, n_neighbors: int = 20, std_ratio: float = 2.0) -> "PointCloud":
         """
-        Remove statistical outliers using mean ± std_ratio * std criterion.
-
-        For each point, compute mean distance to n_neighbors nearest neighbors.
-        Points with mean_dist > global_mean + std_ratio * global_std are removed.
+        Remove statistical outliers using mean ± std_ratio * std criterion via fast cKDTree.
         """
-        pts = torch.tensor(self.points)
-        dists = torch.cdist(pts, pts)
-        dists.fill_diagonal_(float('inf'))
-        knn_dists, _ = dists.topk(n_neighbors, largest=False, dim=-1)  # (N, k)
-        mean_dists = knn_dists.mean(dim=-1)  # (N,)
+        from scipy.spatial import cKDTree
 
-        mu = mean_dists.mean()
-        sigma = mean_dists.std()
-        keep = (mean_dists <= mu + std_ratio * sigma).numpy()
+        if len(self.points) < n_neighbors + 1:
+            return self
+
+        tree = cKDTree(self.points)
+        dists, _ = tree.query(self.points, k=n_neighbors + 1, workers=-1)
+        mean_dists = dists[:, 1:].mean(axis=-1)
+
+        mu = np.mean(mean_dists)
+        sigma = np.std(mean_dists)
+        keep = mean_dists <= (mu + std_ratio * sigma)
 
         return PointCloud(
             points=self.points[keep],
@@ -76,6 +76,7 @@ class PointCloud:
             normals=self.normals[keep] if self.normals is not None else None,
             confidence=self.confidence[keep] if self.confidence is not None else None,
         )
+
 
     def to_tensor(self, device: str = "cpu") -> dict:
         """Return dict of torch tensors on given device."""
