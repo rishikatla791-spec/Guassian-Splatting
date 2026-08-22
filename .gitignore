@@ -50,17 +50,11 @@ output images/
 *.mkv
 *.gif
 
-# Root level images (keep repo lightweight)
-/*.png
-/*.jpg
-/*.jpeg
-/*.exr
-
-# Exceptions for documentation assets
-!assets/*.png
-!assets/*.jpg
-!docs/*.png
-!docs/*.jpg
+# Image files & renders
+*.png
+*.jpg
+*.jpeg
+*.exr
 
 # Testing & Cache
 .pytest_cache/
