@@ -24,29 +24,49 @@ data/
 downloads/
 output/
 real output/
+output_*/
 viewers/
 msvc/
+imgaes*/
+output images/
 
-# Large binaries, models, archives
+# Large binaries, models, checkpoints & archives
 *.zip
 *.tar.gz
 *.7z
 *.ply
 *.splat
+*.obj
+*.glb
+*.gltf
+*.pth
+*.pt
+*.ckpt
+
+# Video & large render outputs
 *.mp4
+*.avi
+*.mov
+*.mkv
 *.gif
 
-# Image renders in root/output
-*.png
-*.jpg
-*.jpeg
-*.exr
+# Root level images (keep repo lightweight)
+/*.png
+/*.jpg
+/*.jpeg
+/*.exr
 
 # Exceptions for documentation assets
 !assets/*.png
 !assets/*.jpg
 !docs/*.png
 !docs/*.jpg
+
+# Testing & Cache
+.pytest_cache/
+.coverage
+htmlcov/
+*.coverage.*
 
 # OS / Editor files
 .DS_Store
@@ -57,6 +77,15 @@ Thumbs.db
 
 # Environment
 .env
+.venv/
 env/
 venv/
+ENV/
 *.log
+
+# Scratch & temporary scripts
+scratch_*
+.claude/
+mcp-builder/
+webapp-testing/
+frontend-design/

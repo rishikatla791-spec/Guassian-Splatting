@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "gaussian-splatting"
+version = "1.0.0"
+description = "Production-grade Next-Generation 3D Gaussian Splatting system"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "plyfile>=0.9",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "imageio>=2.33.0",
+    "imageio-ffmpeg>=0.4.9",
+    "matplotlib>=3.8.0",
+    "tqdm>=4.66.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gaussian*"]
