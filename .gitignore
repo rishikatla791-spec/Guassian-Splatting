@@ -1,0 +1,62 @@
+﻿# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.idb
+
+# C extensions & build directories
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Datasets and large asset directories
+Room/
+Room_dataset/
+truck/
+data/
+downloads/
+output/
+real output/
+viewers/
+msvc/
+
+# Large binaries, models, archives
+*.zip
+*.tar.gz
+*.7z
+*.ply
+*.splat
+*.mp4
+*.gif
+
+# Image renders in root/output
+*.png
+*.jpg
+*.jpeg
+*.exr
+
+# Exceptions for documentation assets
+!assets/*.png
+!assets/*.jpg
+!docs/*.png
+!docs/*.jpg
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Environment
+.env
+env/
+venv/
+*.log
