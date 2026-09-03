@@ -1,4 +1,4 @@
-﻿# Byte-compiled / optimized / DLL files
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -83,3 +83,18 @@ scratch_*
 mcp-builder/
 webapp-testing/
 frontend-design/
+
+# Android build & studio artifacts
+Android/.gradle/
+Android/.idea/
+Android/**/build/
+Android/build/
+Android/local.properties
+Android/**/.cxx/
+Android/app/.cxx/
+*.apk
+
+# Rust & native build artifacts
+brush/
+rustup-init.exe
+people/

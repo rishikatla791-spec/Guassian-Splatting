@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Mobile 3DGS</string>
+    <string name="title_dashboard">3D Gaussian Splatting</string>
+    <string name="btn_new_scan">Start New 3D Scan</string>
+    <string name="btn_view_demo">View Sample 3D Scene</string>
+    <string name="btn_connect_pc">Connect to GPU PC</string>
+    <string name="status_ready">Ready to capture 3D scene</string>
+    <string name="capture_instruction">Slowly orbit the object to capture 360° views</string>
+    <string name="recording_frames">Captured: %1 frames</string>
+    <string name="btn_stop_capture">Finish &amp; Process Scan</string>
+</resources>
