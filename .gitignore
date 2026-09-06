@@ -92,9 +92,21 @@ Android/build/
 Android/local.properties
 Android/**/.cxx/
 Android/app/.cxx/
+Android_Gaussian_Splatting/.gradle/
+Android_Gaussian_Splatting/.idea/
+Android_Gaussian_Splatting/**/build/
+Android_Gaussian_Splatting/build/
+Android_Gaussian_Splatting/local.properties
+Android_Gaussian_Splatting/**/.cxx/
+Android_Gaussian_Splatting/app/.cxx/
 *.apk
 
 # Rust & native build artifacts
 brush/
 rustup-init.exe
 people/
+scans/
+**/scans/
+test_images_dataset/
+.agents/
+skills-lock.json
