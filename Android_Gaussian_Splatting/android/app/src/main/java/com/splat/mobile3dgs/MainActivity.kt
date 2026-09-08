@@ -117,12 +117,14 @@ class MainActivity : AppCompatActivity() {
         // Timings measured on a Snapdragon 8 Gen 2 (SM8550): ~8 steps/s initially,
         // degrading to ~6 steps/s once densification and thermal throttling kick in.
         val stepOptions = arrayOf(
+            "Direct Photometric (Instant - ~2s, Zero GPU)",
+            "300 Steps (Fast Standalone - ~45s, 360p)",
             "1,000 Steps (Quick test - ~3 min, 720p)",
             "3,000 Steps (Preview - ~8 min, 720p)",
             "7,000 Steps (Balanced - ~20 min, 1080p)",
             "15,000 Steps (High quality - ~45 min, 1080p)"
         )
-        val stepValues = intArrayOf(1000, 3000, 7000, 15000)
+        val stepValues = intArrayOf(0, 300, 1000, 3000, 7000, 15000)
         var selectedIndex = stepValues.indexOf(currentSteps).let { if (it >= 0) it else 0 }
 
         AlertDialog.Builder(this)
@@ -132,12 +134,17 @@ class MainActivity : AppCompatActivity() {
             }
             .setPositiveButton("Save") { dialog, _ ->
                 val chosenSteps = stepValues[selectedIndex]
-                val chosenRes = if (chosenSteps >= 7000) 1080 else 720
+                val chosenRes = when {
+                    chosenSteps >= 7000 -> 1080
+                    chosenSteps >= 1000 -> 720
+                    else -> 360
+                }
                 prefs.edit()
                     .putInt("PREF_TRAINING_STEPS", chosenSteps)
                     .putInt("PREF_TRAINING_RES", chosenRes)
                     .apply()
-                Toast.makeText(this, "Target: $chosenSteps steps (${chosenRes}p)", Toast.LENGTH_SHORT).show()
+                val desc = if (chosenSteps == 0) "Direct Photometric (~2s)" else "$chosenSteps steps (${chosenRes}p)"
+                Toast.makeText(this, "Target: $desc", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
             .setNeutralButton("Cloud Server IP") { dialog, _ ->

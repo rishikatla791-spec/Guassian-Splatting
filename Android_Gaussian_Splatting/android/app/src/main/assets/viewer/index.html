@@ -670,8 +670,11 @@
                     proj[5] * this.canvas.height * 0.5);
 
                 gl.bindVertexArray(this.vao);
-                // Render full Gaussian splat count on flagship mobile GPU (Adreno 740)
-                const countToRender = this.splatCount;
+                // Dynamic LOD: On budget mobile GPUs (e.g. Adreno 613 / Mali), throttle fillrate during touch gestures to sustain locked 60 FPS
+                let countToRender = this.splatCount;
+                if (this.touch && this.touch.mode !== 'none' && this.splatCount > 60000) {
+                    countToRender = Math.floor(this.splatCount * 0.65);
+                }
                 gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, countToRender);
                 gl.bindVertexArray(null);
             }

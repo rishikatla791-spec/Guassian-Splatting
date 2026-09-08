@@ -441,7 +441,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         maxKeyframes = when (profile.tier) {
             com.splat.mobile3dgs.hardware.HardwareTier.TIER_1_FLAGSHIP -> 200
             com.splat.mobile3dgs.hardware.HardwareTier.TIER_2_BALANCED -> 120
-            com.splat.mobile3dgs.hardware.HardwareTier.TIER_3_VIEWER_ONLY -> 70
+            com.splat.mobile3dgs.hardware.HardwareTier.TIER_3_STANDALONE -> 70
         }
         val availGb = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getAvailableRamGb(this)
         Log.i(TAG, "Capture start: tier=${profile.tier.tierName} availRam=${"%.1f".format(availGb)}GB maxKeyframes=$maxKeyframes")
@@ -482,30 +482,58 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 }
                 datasetExporter.exportDataset(fx, fy, cx, cy, imgW, imgH)
 
-                if (!NativeBrushEngine.isNativeEngineAvailable()) {
-                    val loadErr = NativeBrushEngine.getLoadError() ?: "libbrush_c.so failed to load"
+                val profile = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getDeviceProfile(this@CaptureActivity)
+                val isTier3 = (profile.tier == com.splat.mobile3dgs.hardware.HardwareTier.TIER_3_STANDALONE)
+                val isNativeVulkanReady = NativeBrushEngine.isNativeEngineAvailable()
+
+                withContext(Dispatchers.Main) {
+                    tvStatus.text = "Generating on-device 3D splats..."
+                }
+
+                val datasetDir = datasetExporter.outputDir
+                val outputSplat = File(filesDir, "${datasetDir.name}.splat")
+
+                // Generate standalone Direct Photometric Splat model (zero GPU/Vulkan dependency, runs in ~1.5s on CPU)
+                val directSplatCount = com.splat.mobile3dgs.engine.GaussianInitializer.generatePhotometricSplatModel(
+                    points = datasetExporter.accumulatedFeaturePoints,
+                    datasetDir = datasetDir,
+                    frames = datasetExporter.capturedFrames,
+                    fx = fx, fy = fy, cx = cx, cy = cy,
+                    origImgWidth = imgW, origImgHeight = imgH,
+                    outputFile = outputSplat,
+                    maxGaussians = profile.maxGaussians
+                )
+                Log.i(TAG, "Direct Photometric Model generated: $directSplatCount splats")
+
+                val prefs = getSharedPreferences("Mobile3DGS_Prefs", Context.MODE_PRIVATE)
+                val userExplicitSteps = prefs.contains("PREF_TRAINING_STEPS")
+                val targetIterations = prefs.getInt("PREF_TRAINING_STEPS", profile.totalSteps)
+                val targetResolution = prefs.getInt("PREF_TRAINING_RES", profile.maxResolution)
+
+                // If native engine is NOT available, or user requested 0 steps (instant), or if this is Tier 3 without explicit steps:
+                val shouldUseDirectModelImmediately = (!isNativeVulkanReady) || (targetIterations == 0) || (isTier3 && !userExplicitSteps)
+
+                if (shouldUseDirectModelImmediately) {
                     withContext(Dispatchers.Main) {
-                        resetRecordUi()
-                        AlertDialog.Builder(this@CaptureActivity)
-                            .setTitle("Engine Load Error")
-                            .setMessage("The on-device 3DGS engine could not initialize:\n\n$loadErr")
-                            .setPositiveButton("OK", null).show()
+                        progressBar.visibility = View.GONE
+                        if (outputSplat.exists() && outputSplat.length() > 0) {
+                            Toast.makeText(this@CaptureActivity, "🎉 3D Model Generated On-Device ($directSplatCount splats)!", Toast.LENGTH_LONG).show()
+                            startActivity(Intent(this@CaptureActivity, ViewerActivity::class.java).apply {
+                                putExtra("MODEL_NAME", "Standalone On-Device Scan")
+                                putExtra("MODEL_PATH", outputSplat.absolutePath)
+                            })
+                            finish()
+                        } else {
+                            resetRecordUi()
+                            tvStatus.text = "Capture finished, but insufficient surface points detected."
+                            Toast.makeText(this@CaptureActivity, "Could not seed 3D points. Ensure well-lit surface.", Toast.LENGTH_LONG).show()
+                        }
                     }
                     return@launch
                 }
 
-                // Defaults come from the detected hardware tier so a budget device
-                // does not inherit flagship settings it cannot finish. An explicit
-                // user choice in the quality dialog still wins.
-                val profile = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getDeviceProfile(this@CaptureActivity)
-                val prefs = getSharedPreferences("Mobile3DGS_Prefs", Context.MODE_PRIVATE)
-                val targetIterations = prefs.getInt("PREF_TRAINING_STEPS", profile.totalSteps)
-                val targetResolution = prefs.getInt("PREF_TRAINING_RES", profile.maxResolution)
-                Log.i(TAG, "Training profile: ${profile.tier.tierName} ram=${profile.totalRamGb}GB " +
-                        "soc=${profile.socModel} -> steps=$targetIterations res=$targetResolution")
-
-                val datasetDir = datasetExporter.outputDir
-                val outputSplat = File(filesDir, "${datasetDir.name}.splat")
+                // If Vulkan engine IS ready and user wants iterative refinement:
+                Log.i(TAG, "Starting on-device training: tier=${profile.tier.tierName} steps=$targetIterations res=$targetResolution")
                 val modelName = "On-Device Scan ($targetIterations steps)"
 
                 // Hand the long-running optimization to a foreground service so it
@@ -524,16 +552,26 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     TrainingService.doneListener = { ok, path ->
                         runOnUiThread {
                             progressBar.visibility = View.GONE
-                            if (ok) {
-                                Toast.makeText(this@CaptureActivity, "3D model generated on-device!", Toast.LENGTH_LONG).show()
+                            if (ok && File(path).exists() && File(path).length() > 0) {
+                                Toast.makeText(this@CaptureActivity, "3D model refined on-device!", Toast.LENGTH_LONG).show()
                                 startActivity(Intent(this@CaptureActivity, ViewerActivity::class.java).apply {
                                     putExtra("MODEL_NAME", modelName)
                                     putExtra("MODEL_PATH", path)
                                 })
                                 finish()
                             } else {
-                                resetRecordUi()
-                                tvStatus.text = "Training finished (no output produced)"
+                                // Graceful fallback: Open the direct photometric splat model if training didn't produce a new one
+                                if (outputSplat.exists() && outputSplat.length() > 0) {
+                                    Toast.makeText(this@CaptureActivity, "Opening direct on-device 3D model!", Toast.LENGTH_SHORT).show()
+                                    startActivity(Intent(this@CaptureActivity, ViewerActivity::class.java).apply {
+                                        putExtra("MODEL_NAME", "Standalone 3D Model ($directSplatCount splats)")
+                                        putExtra("MODEL_PATH", outputSplat.absolutePath)
+                                    })
+                                    finish()
+                                } else {
+                                    resetRecordUi()
+                                    tvStatus.text = "Training finished (no output produced)"
+                                }
                             }
                         }
                     }

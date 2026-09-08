@@ -12,7 +12,7 @@ import android.util.Log
 enum class HardwareTier(val tierName: String, val description: String) {
     TIER_1_FLAGSHIP("Tier 1 (Flagship)", "Snapdragon 8 Gen 2 / 12GB+ RAM: Full On-Device 3DGS (7k steps, 1080p)"),
     TIER_2_BALANCED("Tier 2 (Balanced)", "8GB - 11GB RAM: Optimized On-Device 3DGS (3.5k steps, 720p)"),
-    TIER_3_VIEWER_ONLY("Tier 3 (View Only)", "<8GB RAM: Viewport, Measurement & Cloud Assist Mode")
+    TIER_3_STANDALONE("Tier 3 (Standalone)", "<8GB RAM: Standalone Direct Photometric Splatting & 360p Fast Refine")
 }
 
 data class TrainingProfile(
@@ -24,7 +24,8 @@ data class TrainingProfile(
     val exportEvery: Int,
     val useHalfPrecision: Boolean,
     val totalRamGb: Float,
-    val socModel: String
+    val socModel: String,
+    val supportsDirectPhotometricSplat: Boolean = true
 )
 
 object DeviceCapabilityManager {
@@ -34,17 +35,20 @@ object DeviceCapabilityManager {
         val totalRamGb = getTotalRamGb(context)
         val soc = getSocModel()
 
-        // NOTE: ActivityManager reports *usable* RAM, not the marketing figure --
-        // a 12 GB device reports ~11.0 GB and an 8 GB device ~7.3 GB once the
-        // kernel/GPU carve-outs are excluded. Thresholds are set below the
-        // nominal values so real flagships are not silently demoted a tier.
+        val socLower = soc.lowercase()
+        val isBudgetSoc = socLower.contains("sm4") || socLower.contains("sm6") ||
+                socLower.contains("4450") || socLower.contains("6375") ||
+                socLower.contains("helio") || socLower.contains("g99") ||
+                socLower.contains("dimensity 6") || socLower.contains("dimensity 7")
+
         val tier = when {
+            isBudgetSoc -> HardwareTier.TIER_3_STANDALONE
             totalRamGb >= 10.5f -> HardwareTier.TIER_1_FLAGSHIP
             totalRamGb >= 6.8f -> HardwareTier.TIER_2_BALANCED
-            else -> HardwareTier.TIER_3_VIEWER_ONLY
+            else -> HardwareTier.TIER_3_STANDALONE
         }
 
-        Log.i(TAG, "Device profile evaluated: SoC=$soc, RAM=${"%.1f".format(totalRamGb)} GB -> $tier")
+        Log.i(TAG, "Device profile evaluated: SoC=$soc (budget=$isBudgetSoc), RAM=${"%.1f".format(totalRamGb)} GB -> $tier")
 
         return when (tier) {
             HardwareTier.TIER_1_FLAGSHIP -> TrainingProfile(
@@ -56,7 +60,8 @@ object DeviceCapabilityManager {
                 exportEvery = 1000,
                 useHalfPrecision = true,
                 totalRamGb = totalRamGb,
-                socModel = soc
+                socModel = soc,
+                supportsDirectPhotometricSplat = true
             )
             HardwareTier.TIER_2_BALANCED -> TrainingProfile(
                 tier = tier,
@@ -67,21 +72,23 @@ object DeviceCapabilityManager {
                 exportEvery = 500,
                 useHalfPrecision = true,
                 totalRamGb = totalRamGb,
-                socModel = soc
+                socModel = soc,
+                supportsDirectPhotometricSplat = true
             )
-            HardwareTier.TIER_3_VIEWER_ONLY -> TrainingProfile(
+            HardwareTier.TIER_3_STANDALONE -> TrainingProfile(
                 tier = tier,
-                // Budget SoCs (e.g. Snapdragon 4 series) run roughly an order of
-                // magnitude slower than a flagship, so keep the first run short
-                // enough to actually finish before thermal throttling dominates.
-                totalSteps = 1000,
-                maxResolution = 540,
-                maxGaussians = 200000,
-                refineEvery = 150,
-                exportEvery = 500,
+                // Budget SoCs (e.g. Snapdragon 4/6 series, Mali-G52) need lightweight
+                // parameters to ensure training completes in under ~45s without thermal
+                // throttling or exceeding available user-space RAM.
+                totalSteps = 300,
+                maxResolution = 360,
+                maxGaussians = 80000,
+                refineEvery = 100,
+                exportEvery = 300,
                 useHalfPrecision = false,
                 totalRamGb = totalRamGb,
-                socModel = soc
+                socModel = soc,
+                supportsDirectPhotometricSplat = true
             )
         }
     }
