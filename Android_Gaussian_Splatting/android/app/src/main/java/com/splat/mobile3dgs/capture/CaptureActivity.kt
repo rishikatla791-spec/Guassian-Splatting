@@ -97,6 +97,10 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
      */
     private var maxKeyframes = 120
     @Volatile private var frameLimitNotified = false
+    @Volatile private var depthLogged = false
+    @Volatile private var depthEnabled = false
+    @Volatile private var sessionResumed = false
+    @Volatile private var trainingActive = false
 
     // Display geometry sync (activity is locked portrait).
     private var viewportWidth = 0
@@ -104,6 +108,20 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     @Volatile private var viewportChanged = false
 
     companion object {
+        /** ARCore permits one Session per process; keep it here so retries reuse it. */
+        @Volatile private var sharedSession: Session? = null
+
+        private const val PREF_ARCORE_TIER = "PREF_ARCORE_TIER"
+        private const val PREF_ARCORE_TIER_OK = "PREF_ARCORE_TIER_OK"
+
+        /** Compatibility ladder: (name, max CPU image width, request depth). */
+        private val ARCORE_TIERS = listOf(
+            Triple("CPU<=1920 + depth", 1920, true),
+            Triple("CPU<=1280 + depth", 1280, true),
+            Triple("default camera config + depth", 0, true),
+            Triple("default camera config, no depth", 0, false)
+        )
+
         private const val TAG = "CaptureActivity"
         private const val REQUEST_CODE_PERMISSIONS = 10
         private const val REQUEST_CODE_NOTIFICATIONS = 11
@@ -164,8 +182,34 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     override fun onResume() {
         super.onResume()
         if (!allPermissionsGranted()) return
+        // Do not restart the camera while training is running.
+        if (trainingActive) return
 
         if (session == null) {
+            // Play Services for AR can be installed on ANY device, but ARCore only
+            // functions on Google-certified hardware. requestInstall() reports
+            // INSTALLED regardless, so an uncertified device otherwise surfaces as a
+            // confusing camera failure. Check capability explicitly first.
+            val availability = try {
+                ArCoreApk.getInstance().checkAvailability(this)
+            } catch (t: Throwable) {
+                Log.w(TAG, "checkAvailability failed: ${t.message}")
+                null
+            }
+            Log.i(TAG, "ARCore availability = $availability")
+            if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE) {
+                AlertDialog.Builder(this)
+                    .setTitle("3D scanning not supported")
+                    .setMessage(
+                        "This device is not ARCore-certified, so live 3D capture is " +
+                        "unavailable. You can still open and view existing 3D models."
+                    )
+                    .setPositiveButton("OK") { _, _ -> finish() }
+                    .setOnDismissListener { finish() }
+                    .show()
+                return
+            }
+
             try {
                 when (ArCoreApk.getInstance().requestInstall(this, userRequestedInstall)) {
                     ArCoreApk.InstallStatus.INSTALL_REQUESTED -> {
@@ -175,20 +219,6 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     ArCoreApk.InstallStatus.INSTALLED -> { /* proceed */ }
                     else -> {}
                 }
-
-                val newSession = Session(this)
-                selectHighestResolutionCameraConfig(newSession)
-
-                val config = Config(newSession).apply {
-                    updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
-                    focusMode = Config.FocusMode.AUTO
-                    planeFindingMode = Config.PlaneFindingMode.DISABLED
-                    if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-                        depthMode = Config.DepthMode.AUTOMATIC
-                    }
-                }
-                newSession.configure(config)
-                session = newSession
             } catch (e: UnavailableUserDeclinedInstallationException) {
                 toastAndFinish("Please install Google Play Services for AR")
                 return
@@ -204,44 +234,117 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             } catch (e: UnavailableSdkTooOldException) {
                 toastAndFinish("App is out of date for ARCore")
                 return
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to create ARCore session", e)
+            } catch (e: Throwable) {
+                Log.e(TAG, "ARCore availability check failed", e)
                 toastAndFinish("ARCore init failed: ${e.localizedMessage}")
                 return
             }
-        }
 
-        try {
-            session?.resume()
-        } catch (e: CameraNotAvailableException) {
-            Log.e(TAG, "Camera not available", e)
-            session = null
-            toastAndFinish("Camera not available for ARCore")
-            return
+            if (!startSessionWithFallback()) {
+                toastAndFinish("ARCore could not start the camera on this device")
+                return
+            }
+        } else {
+            try {
+                session?.resume()
+                sessionResumed = true
+            } catch (t: Throwable) {
+                // Do not close the session here; retry configurations on it instead.
+                Log.w(TAG, "resume() failed on existing session: ${t.javaClass.simpleName}", t)
+                try { session?.pause() } catch (ignored: Throwable) { }
+                if (!startSessionWithFallback()) {
+                    toastAndFinish("ARCore could not restart the camera")
+                    return
+                }
+            }
         }
         glSurfaceView.onResume()
     }
 
-    override fun onPause() {
-        super.onPause()
-        if (session != null) {
+    /**
+     * Start ARCore, degrading the configuration until one actually works.
+     *
+     * Two hard-won constraints shape this:
+     *  1. ARCore allows only ONE Session per process, so every candidate is tried
+     *     by reconfiguring the SAME session rather than creating a new one.
+     *  2. Calling close() on a session whose camera failed to start aborts the
+     *     whole process inside ArSession_destroy ("Client must stop camera before
+     *     attempting to block until stopped") - an uncatchable SIGABRT. So a
+     *     failed candidate is never closed, only paused.
+     *
+     * Budget devices commonly cannot run a 1080p CPU image, a GPU texture stream
+     * and depth at once, so CPU image size is reduced before depth is given up.
+     */
+    /** Stop the camera, VIO and GL rendering so training gets the GPU to itself. */
+    private fun releaseCaptureResources() {
+        try {
+            glSurfaceView.renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
             glSurfaceView.onPause()
-            session?.pause()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not pause GL surface: ${t.message}")
+        }
+        if (sessionResumed) {
+            try { session?.pause() } catch (t: Throwable) { Log.w(TAG, "session pause: ${t.message}") }
+            sessionResumed = false
+        }
+        Log.i(TAG, "Capture pipeline released for training (camera + VIO + GL stopped)")
+    }
+
+    private fun startSessionWithFallback(): Boolean {
+        val s = try {
+            sharedSession ?: Session(this).also { sharedSession = it }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Could not create ARCore session", t)
+            return false
+        }
+        session = s
+
+        // A failed resume() leaves ARCore's camera running, and every later
+        // configure()/resume() on that session then fails with "Client must stop
+        // camera before attempting to block until stopped". Retrying in-process is
+        // therefore useless, so we make exactly ONE attempt per launch and walk a
+        // compatibility ladder across launches instead, remembering where we got to.
+        val prefs = getSharedPreferences("Mobile3DGS_Prefs", Context.MODE_PRIVATE)
+        val tier = prefs.getInt(PREF_ARCORE_TIER, 0).coerceIn(0, ARCORE_TIERS.lastIndex)
+        val (name, maxWidth, wantDepth) = ARCORE_TIERS[tier]
+
+        try {
+            if (maxWidth > 0) selectCameraConfig(s, maxWidth)
+
+            val cfg = Config(s)
+            cfg.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
+            cfg.focusMode = Config.FocusMode.AUTO
+            cfg.planeFindingMode = Config.PlaneFindingMode.DISABLED
+            cfg.depthMode =
+                if (wantDepth && s.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                    Config.DepthMode.AUTOMATIC
+                } else {
+                    Config.DepthMode.DISABLED
+                }
+            s.configure(cfg)
+            s.resume()
+
+            sessionResumed = true
+            depthEnabled = cfg.depthMode == Config.DepthMode.AUTOMATIC
+            prefs.edit().putInt(PREF_ARCORE_TIER, tier).putBoolean(PREF_ARCORE_TIER_OK, true).apply()
+            Log.i(TAG, "ARCore session started: tier $tier '$name' (depthEnabled=$depthEnabled)")
+            return true
+        } catch (t: Throwable) {
+            Log.w(TAG, "ARCore tier $tier '$name' rejected: ${t.javaClass.simpleName}: ${t.message}")
+            // Only walk the compatibility ladder while we have never succeeded; once a
+            // tier is known good, a failure is transient and must not permanently
+            // downgrade capture quality.
+            val everWorked = prefs.getBoolean(PREF_ARCORE_TIER_OK, false)
+            if (!everWorked && tier < ARCORE_TIERS.lastIndex) {
+                prefs.edit().putInt(PREF_ARCORE_TIER, tier + 1).apply()
+                Log.i(TAG, "Will try tier ${tier + 1} on next launch")
+            }
+            return false
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        // Detach UI hooks; the service keeps training and reports via notification.
-        TrainingService.progressListener = null
-        TrainingService.doneListener = null
-        saveExecutor.shutdown()
-        session?.close()
-        session = null
-    }
-
-    /** Pick the supported camera config with the largest CPU image resolution. */
-    private fun selectHighestResolutionCameraConfig(session: Session) {
+    /** Pick the largest supported CPU image at or below [maxWidth]. */
+    private fun selectCameraConfig(session: Session, maxWidth: Int) {
         try {
             val filter = CameraConfigFilter(session)
             val configs = session.getSupportedCameraConfigs(filter)
@@ -250,17 +353,17 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             for (cfg in configs) {
                 val size = cfg.imageSize
                 val area = size.width * size.height
-                if (area > bestArea) {
+                if (size.width <= maxWidth && area > bestArea) {
                     bestArea = area
                     best = cfg
                 }
             }
             if (best != null) {
                 session.cameraConfig = best
-                Log.i(TAG, "Selected camera CPU image ${best.imageSize.width}x${best.imageSize.height}")
+                Log.i(TAG, "Camera config -> CPU ${best.imageSize.width}x${best.imageSize.height}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not select high-res camera config: ${e.message}")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Camera config selection failed: ${t.message}")
         }
     }
 
@@ -285,6 +388,8 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     }
 
     override fun onDrawFrame(gl: GL10?) {
+        // Never touch the camera or ARCore while the optimizer owns the GPU.
+        if (trainingActive) return
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         val session = this.session ?: return
         if (backgroundRenderer.textureId == -1) return
@@ -396,6 +501,56 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             Log.w(TAG, "acquirePointCloud failed: ${e.message}")
         }
 
+        // Dense depth seeding: unproject the ARCore depth map into world-space
+        // points. Feature points alone give only a few hundred seeds, which is
+        // far too sparse for the optimizer to start from.
+        var depthPts: FloatArray? = null
+        var depthImage: Image? = null
+        var confImage: Image? = null
+        try {
+            // Prefer the SMOOTHED depth map: it is inpainted and dense, whereas raw
+            // depth only returns high-confidence pixels and leaves most of the map
+            // empty (~98% of samples were being discarded), which starves seeding.
+            depthImage = try {
+                frame.acquireDepthImage16Bits()
+            } catch (e: NotYetAvailableException) {
+                null
+            } catch (e: Throwable) {
+                try { frame.acquireRawDepthImage16Bits() } catch (e2: Throwable) { null }
+            }
+            if (depthImage != null) {
+                // Only raw depth ships a confidence map; smoothed depth is fully valid.
+                confImage = try { frame.acquireRawDepthConfidenceImage() } catch (e: Throwable) { null }
+                if (confImage != null &&
+                    (confImage.width != depthImage.width || confImage.height != depthImage.height)) {
+                    confImage.close()
+                    confImage = null
+                }
+                val intr = frame.camera.imageIntrinsics
+                depthPts = DepthPointExtractor.extractWorldPoints(
+                    depthImage = depthImage,
+                    confidenceImage = confImage,
+                    focal = intr.focalLength,
+                    principal = intr.principalPoint,
+                    imageDims = intr.imageDimensions,
+                    cameraPose = pose
+                )
+                if (!depthLogged) {
+                    depthLogged = true
+                    Log.i(TAG, "Depth seeding active: ${depthImage.width}x${depthImage.height} " +
+                            "conf=${confImage != null} -> ${(depthPts?.size ?: 0) / 4} points/frame")
+                }
+            } else if (!depthLogged) {
+                depthLogged = true
+                Log.w(TAG, "Depth image unavailable; falling back to sparse feature points only")
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Depth extraction failed: ${e.message}")
+        } finally {
+            depthImage?.close()
+            confImage?.close()
+        }
+
         val timestamp = frame.timestamp
         lastKeptPos = pos
         lastKeptQuat = quat
@@ -403,8 +558,10 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         pendingSaves.incrementAndGet()
 
         val ptsForSave = pointsCopy
+        val depthForSave = depthPts
         saveExecutor.execute {
             try {
+                depthForSave?.let { datasetExporter.addDepthPoints(it) }
                 datasetExporter.saveCapturedFrameJpeg(
                     jpegBytes = jpeg,
                     poseMatrix = poseMatrix,
@@ -477,8 +634,9 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     return@launch
                 }
 
+                val depthSeeds = datasetExporter.depthPointCount()
                 withContext(Dispatchers.Main) {
-                    tvStatus.text = "Writing dataset ($frameCount keyframes)..."
+                    tvStatus.text = "Writing dataset ($frameCount keyframes, $depthSeeds depth points)..."
                 }
                 datasetExporter.exportDataset(fx, fy, cx, cy, imgW, imgH)
 
@@ -575,6 +733,13 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                             }
                         }
                     }
+
+                    // Training saturates the GPU for minutes. Leaving the ARCore
+                    // camera, VIO tracking and the continuous GL render loop running
+                    // alongside it starves the optimizer and makes the whole device
+                    // lag, so tear the capture pipeline down first.
+                    trainingActive = true
+                    releaseCaptureResources()
 
                     TrainingService.start(
                         context = this@CaptureActivity,

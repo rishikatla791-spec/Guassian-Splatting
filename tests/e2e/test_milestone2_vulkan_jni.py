@@ -22,7 +22,8 @@ from pathlib import Path
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-LIBBRUSH_PATH = PROJECT_ROOT / "Android_Gaussian_Splatting" / "app" / "src" / "main" / "jniLibs" / "arm64-v8a" / "libbrush_c.so"
+_candidate_libbrush = PROJECT_ROOT / "Android_Gaussian_Splatting" / "android" / "app" / "src" / "main" / "jniLibs" / "arm64-v8a" / "libbrush_c.so"
+LIBBRUSH_PATH = _candidate_libbrush if _candidate_libbrush.exists() else (PROJECT_ROOT / "Android_Gaussian_Splatting" / "app" / "src" / "main" / "jniLibs" / "arm64-v8a" / "libbrush_c.so")
 TEST_DATASET_DIR = PROJECT_ROOT / "test_images_dataset"
 
 

@@ -91,6 +91,36 @@ object GaussianInitializer {
         return filtered.size
     }
 
+    /**
+     * Write a binary PLY from a flat [x, y, z, ...] array. Used for the dense
+     * depth-derived cloud, where allocating one object per point would cost
+     * tens of megabytes on a mid-range device.
+     */
+    fun writePlyFromXyz(xyz: FloatArray, count: Int, outputFile: File): Int {
+        if (count <= 0) return 0
+        val header = listOf(
+            "ply",
+            "format binary_little_endian 1.0",
+            "element vertex $count",
+            "property float x",
+            "property float y",
+            "property float z",
+            "end_header"
+        ).joinToString(separator = "\n", postfix = "\n")
+
+        val body = ByteBuffer.allocate(count * 12).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until count) {
+            body.putFloat(xyz[i * 3])
+            body.putFloat(xyz[i * 3 + 1])
+            body.putFloat(xyz[i * 3 + 2])
+        }
+        FileOutputStream(outputFile).use { out ->
+            out.write(header.toByteArray(Charsets.US_ASCII))
+            out.write(body.array())
+        }
+        return count
+    }
+
     fun initializeFromFeaturePoints(
         points: List<FeaturePoint3D>,
         outputFile: File,

@@ -33,6 +33,37 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
     val capturedFrames = mutableListOf<FrameMetaData>()
     val accumulatedFeaturePoints = mutableListOf<FeaturePoint3D>()
 
+    // Dense geometry unprojected from the ARCore depth map. Deduplicated into a
+    // voxel grid as points arrive so memory stays bounded by scene volume rather
+    // than by (frames x depth pixels).
+    private val depthVoxels = HashMap<Long, FloatArray>()
+    private val depthVoxelSize = 0.01f
+    private val maxDepthPoints = 250_000
+
+    /** @param pts flat [x, y, z, confidence, ...] in world space. */
+    @Synchronized
+    fun addDepthPoints(pts: FloatArray) {
+        var i = 0
+        while (i + 3 < pts.size) {
+            if (depthVoxels.size >= maxDepthPoints) return
+            val x = pts[i]; val y = pts[i + 1]; val z = pts[i + 2]; val c = pts[i + 3]
+            val vx = kotlin.math.floor(x / depthVoxelSize).toInt()
+            val vy = kotlin.math.floor(y / depthVoxelSize).toInt()
+            val vz = kotlin.math.floor(z / depthVoxelSize).toInt()
+            val key = (vx.toLong() and 0x1FFFFF) or
+                    ((vy.toLong() and 0x1FFFFF) shl 21) or
+                    ((vz.toLong() and 0x1FFFFF) shl 42)
+            val existing = depthVoxels[key]
+            if (existing == null || c > existing[3]) {
+                depthVoxels[key] = floatArrayOf(x, y, z, c)
+            }
+            i += 4
+        }
+    }
+
+    @Synchronized
+    fun depthPointCount(): Int = depthVoxels.size
+
     /**
      * Save a frame that has already been JPEG-encoded (e.g. from an ARCore CPU image).
      * [poseMatrix] is the 16-element column-major camera-to-world matrix from
@@ -179,8 +210,7 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
         // ply_file_path the engine initialises from random points inside the
         // camera frustums, which produces a formless blob on short runs.
         val plyFile = File(outputDir, "points3d.ply")
-        val seededPoints = com.splat.mobile3dgs.engine.GaussianInitializer
-            .writeInitialPointCloudPly(accumulatedFeaturePoints, plyFile)
+        val seededPoints = writeSeedCloud(plyFile)
         if (seededPoints > 0) {
             rootJson.put("ply_file_path", plyFile.name)
             android.util.Log.i(
@@ -200,6 +230,33 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
         exportInitialPointCloud()
 
         return jsonFile
+    }
+
+    /**
+     * Combine the dense depth cloud with the sparse ARCore feature points and
+     * write the seed PLY the trainer initialises from.
+     */
+    @Synchronized
+    private fun writeSeedCloud(plyFile: File): Int {
+        val total = depthVoxels.size + accumulatedFeaturePoints.size
+        if (total == 0) return 0
+        val xyz = FloatArray(total * 3)
+        var n = 0
+        for (v in depthVoxels.values) {
+            if (v[0].isFinite() && v[1].isFinite() && v[2].isFinite()) {
+                xyz[n++] = v[0]; xyz[n++] = v[1]; xyz[n++] = v[2]
+            }
+        }
+        for (p in accumulatedFeaturePoints) {
+            if (p.x.isFinite() && p.y.isFinite() && p.z.isFinite()) {
+                xyz[n++] = p.x; xyz[n++] = p.y; xyz[n++] = p.z
+            }
+        }
+        android.util.Log.i(
+            "DatasetExporter",
+            "Seed cloud: ${depthVoxels.size} depth points + ${accumulatedFeaturePoints.size} feature points"
+        )
+        return com.splat.mobile3dgs.engine.GaussianInitializer.writePlyFromXyz(xyz, n / 3, plyFile)
     }
 
     private fun exportInitialPointCloud() {
