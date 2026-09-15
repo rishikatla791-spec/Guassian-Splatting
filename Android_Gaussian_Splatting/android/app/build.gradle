@@ -85,8 +85,10 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
             if (!hasReleaseKeystore) {
-                logger.warn("WARNING: no android/keystore.properties -- signing the " +
-                        "release build with the DEBUG key. Installable, not publishable.")
+                // Configuration-time, so phrase it for any task: this is a statement
+                // about how release WOULD be signed, not about the running build.
+                logger.lifecycle("No android/keystore.properties found -- release " +
+                        "builds will be signed with the DEBUG key (installable, not publishable).")
             }
         }
     }

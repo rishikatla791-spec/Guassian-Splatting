@@ -101,6 +101,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
      */
     private val frameQualityFilter = FrameQualityFilter()
     @Volatile private var lastQualityHintMs = 0L
+    @Volatile private var qualityHintShowing = false
 
     /** OpenCV [k1, k2, p1, p2] read once from Camera2, or null on a device that reports none. */
     @Volatile private var lensDistortion: FloatArray? = null
@@ -155,6 +156,8 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         /** Minimum gap between on-screen capture-quality hints, so they stay readable. */
         private const val QUALITY_HINT_INTERVAL_MS = 1500L
+
+        private const val SCANNING_STATUS = "Scanning — orbit slowly around the object..."
 
         // A candidate is redundant if some kept view is within BOTH of these.
         // Views must be separated by an ANGLE about the subject, not a fixed
@@ -599,9 +602,16 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             val now = System.currentTimeMillis()
             if (hint != null && now - lastQualityHintMs > QUALITY_HINT_INTERVAL_MS) {
                 lastQualityHintMs = now
+                qualityHintShowing = true
                 runOnUiThread { if (isRecording) tvStatus.text = hint }
             }
             return
+        }
+        // Frames are usable again -- clear a stale hint rather than leaving
+        // "move more slowly" on screen for the rest of the scan.
+        if (qualityHintShowing) {
+            qualityHintShowing = false
+            runOnUiThread { if (isRecording) tvStatus.text = SCANNING_STATUS }
         }
 
         val jpeg: ByteArray
@@ -758,6 +768,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         pendingSaves.set(0)
         frameQualityFilter.reset()
         lastQualityHintMs = 0L
+        qualityHintShowing = false
 
         val profile = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getDeviceProfile(this)
         // Cap on FREE RAM rather than the SoC label: training memory is driven by
@@ -774,7 +785,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         isRecording = true
 
         btnRecord.text = "Stop & Train 3DGS"
-        runOnUiThread { tvStatus.text = "Scanning — orbit slowly around the object..." }
+        runOnUiThread { tvStatus.text = SCANNING_STATUS }
     }
 
     private fun stopRecordingSession() {
