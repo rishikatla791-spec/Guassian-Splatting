@@ -122,3 +122,8 @@ keystore.properties
 Android_Gaussian_Splatting/test-images/
 temp_test_run/
 gaussian-splatting/
+
+# Release signing credentials -- never commit
+keystore.properties
+*.jks
+*.keystore
