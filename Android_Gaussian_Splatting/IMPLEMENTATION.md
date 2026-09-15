@@ -1,8 +1,9 @@
 # Mobile 3D Gaussian Splatting (3DGS)
 # Complete End-to-End Standalone Android Engineering Master Plan
 
-**Version:** 1.0  
-**Status:** Engineering Master Plan  
+**Version:** 1.1  
+**Status:** Engineering plan. Sections describing capabilities that are
+not yet implemented are marked; the toolchain table reflects the ACTUAL build.  
 **Date:** September 2026  
 **Target Hardware:** Qualcomm Snapdragon 8 Gen 2 (Adreno 740 GPU, 12 GB RAM, ARM64 `arm64-v8a`, Android 16)  
 **Execution Paradigm:** **100% Standalone On-Device** (Zero Cloud / Zero Desktop / Zero CUDA Server / Zero Internet Required)
@@ -56,15 +57,15 @@ All development, compilation, and native builds must strictly adhere to the pinn
 
 | Subsystem | Specification / Version | Rationale & Rules |
 | :--- | :--- | :--- |
-| **Operating System** | Android 16 (API Level 36) | Target & compile SDK pinned to 36; minimum SDK 28 (Android 9.0). Do not use preview API 37. |
-| **IDE** | Android Studio Quail 4 (2026.1.4) | Standardized development environment. |
-| **Android Gradle Plugin** | AGP `9.4.0` | Production build system. |
-| **Gradle** | `9.6.0` | Matching build runner. |
+| **Operating System** | Android 14 (API Level 34) | Target & compile SDK are 34; minimum SDK 26 (Android 8.0). |
+| **IDE** | Android Studio (any release shipping AGP 8.4) | Standardized development environment. |
+| **Android Gradle Plugin** | AGP `8.4.0` | Production build system. |
+| **Gradle** | `8.7` | Matching build runner. |
 | **JDK** | `JDK 17` (or bundled Android Studio JBR 21) | Strict reproducible compilation. |
-| **Kotlin** | `2.3.21` | Modern Kotlin compiler with coroutines. |
-| **Android NDK** | Pinned `29.0.14206865` (NDK r29) or LTS `27.3.13750724` (NDK r27d) | Consistent ABI compilation; no `latest` or dynamic versions. |
-| **Target Architecture** | `arm64-v8a` exclusively | Optimizations tailored for 64-bit ARM NEON and Vulkan 1.3. 32-bit `armeabi-v7a` and `x86` omitted. |
-| **Google ARCore** | Pinned exact tested release (e.g. `1.48.0` / `1.41.0`) | Deterministic VIO tracking APIs without breaking changes. |
+| **Kotlin** | `1.9.22` | Kotlin compiler with coroutines. |
+| **Android NDK** | Whatever the installed SDK provides; CMake 3.22.1 | The JNI bridge is built from source; `libbrush_c.so` is a prebuilt arm64 binary. |
+| **Target Architecture** | `arm64-v8a` for release; debug also builds `x86_64` so the app installs on emulators for UI work. The training engine is arm64-only. |
+| **Google ARCore** | `1.41.0` | Deterministic VIO tracking APIs without breaking changes. |
 | **App Shell UI** | Kotlin Jetpack Compose / Native Android | High-performance, zero-overhead UI without heavy framework bridges. |
 
 ---
@@ -147,7 +148,12 @@ Each point $i$ in the initial point cloud is converted into a 3D Gaussian primit
   - Split over-reconstructed Gaussians ($s > \tau_{\text{scale}}$) into two child Gaussians with scale reduced by $\frac{1}{1.6}$.
   - Floater pruning: cull Gaussians with $\alpha < 0.04$ or scale exceeding scene bounding box radius.
 - **Training Budget**:
-  - Preset: Fast (2,000 steps, ~60s), Balanced (5,000 steps, ~2.5 min), High Fidelity (7,000 steps, ~4 min).
+  - Measured on a Snapdragon 8 Gen 2 (SM8550), not estimated: roughly 15 steps/s
+    at 720p falling to ~7 as densification and thermal throttling take hold, and
+    ~3 steps/s at 1080p falling to ~1.4. Practical presets: Quick (1,500 steps @
+    720p, ~4 min), Default (3,000 @ 720p, ~5-8 min), High (7,000 @ 720p, ~18 min).
+    1080p costs 2.25x the pixels AND generates the heat that halves throughput, so
+    it is rarely worth it on a phone.
   - Battery & Thermal throttling guards: Pause training if device temperature exceeds $42^\circ\text{C}$ or battery drops below $15\%$.
 
 ---
@@ -253,7 +259,7 @@ graph TD
 1. **Milestone 1: CameraX + ARCore Capture & Quality Gate**
    - Integrate `ARCoreCameraGuideActivity` with geodesic dome nodes and Laplacian blur filtering.
 2. **Milestone 2: Native Vulkan Compute Optimization Engine**
-   - Package and link `libbrush_c.so` (Rust Burn WGPU Vulkan) with `arm64-v8a` NDK r29.
+   - Package and link `libbrush_c.so` (Rust Burn WGPU Vulkan) for `arm64-v8a`.
    - Implement JNI bridge (`brush_bridge.cpp`) for progress callbacks and memory management.
 3. **Milestone 3: 60 FPS Viewport & Model Editing**
    - Implement 3D Bounding Box clipping and eraser tools directly on the splat buffer.

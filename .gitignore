@@ -92,7 +92,9 @@ Android/build/
 Android/local.properties
 Android/**/.cxx/
 Android/app/.cxx/
-Android_Gaussian_Splatting/.gradle/
+# Gradle project-local caches: machine-specific and dirty after every build.
+# The Gradle project lives in Android_Gaussian_Splatting/android/, so match any depth.
+**/.gradle/
 Android_Gaussian_Splatting/.idea/
 Android_Gaussian_Splatting/**/build/
 Android_Gaussian_Splatting/build/
@@ -110,3 +112,13 @@ scans/
 test_images_dataset/
 .agents/
 skills-lock.json
+
+# Release signing material -- never commit keystores or passwords.
+*.jks
+*.keystore
+keystore.properties
+
+# Local capture/COLMAP scratch data - large, machine-specific.
+Android_Gaussian_Splatting/test-images/
+temp_test_run/
+gaussian-splatting/
