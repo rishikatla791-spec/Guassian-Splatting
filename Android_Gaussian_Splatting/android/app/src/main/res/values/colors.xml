@@ -1,19 +1,98 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Mobile 3DGS design tokens - LIGHT ("clay") palette.
+
+    Every colour used anywhere in the app resolves through a name defined here.
+    values-night/colors.xml re-binds the same names for dark mode, so no layout,
+    drawable or style ever needs a literal hex value.
+-->
 <resources>
-    <color name="bg_primary">#0B0E14</color>
-    <color name="bg_secondary">#131822</color>
-    <color name="card_surface">#1A202C</color>
-    <color name="card_border">#2D3748</color>
-    
-    <color name="accent_cyan">#00E5FF</color>
-    <color name="accent_green">#00E676</color>
-    <color name="accent_purple">#7C4DFF</color>
-    
-    <color name="text_white">#FFFFFF</color>
-    <color name="text_muted">#8A99AD</color>
-    <color name="text_dim">#526075</color>
-    
-    <color name="status_online">#00E676</color>
-    <color name="status_offline">#FF5252</color>
-    <color name="overlay_black_70">#B3000000</color>
+
+    <!-- ============ Surfaces ============ -->
+    <color name="clay_bg">#EFF1F9</color>
+    <color name="clay_bg_tint">#F5F2FC</color>
+    <color name="clay_surface">#F8F9FE</color>
+    <color name="clay_surface_elevated">#FFFFFF</color>
+    <color name="clay_surface_sunken">#E5E8F4</color>
+    <color name="clay_outline">#DEE2F0</color>
+    <color name="clay_outline_strong">#C9CFE4</color>
+
+    <!-- ============ Brand ============ -->
+    <color name="clay_primary">#6C63FF</color>
+    <color name="clay_primary_dark">#4F46E0</color>
+    <color name="clay_primary_light">#8E88FF</color>
+    <color name="clay_primary_soft">#E9E7FF</color>
+    <color name="clay_on_primary">#FFFFFF</color>
+
+    <color name="clay_accent">#FF7A93</color>
+    <color name="clay_accent_dark">#F2566F</color>
+    <color name="clay_accent_soft">#FFE8EE</color>
+
+    <color name="clay_mint">#1FC0A4</color>
+    <color name="clay_mint_dark">#12A98F</color>
+    <color name="clay_mint_soft">#DCF7F1</color>
+
+    <color name="clay_amber">#FFAE4F</color>
+    <color name="clay_amber_soft">#FFF0DC</color>
+
+    <color name="clay_danger">#F2566F</color>
+
+    <!-- ============ Text ============ -->
+    <color name="clay_text_primary">#1B1E36</color>
+    <color name="clay_text_secondary">#5E6488</color>
+    <color name="clay_text_tertiary">#9196B8</color>
+    <color name="clay_text_on_accent">#FFFFFF</color>
+
+    <!-- ============ Claymorphic shading ============ -->
+    <color name="clay_shadow_light">#FFFFFF</color>
+    <color name="clay_shadow_light_60">#99FFFFFF</color>
+    <color name="clay_shadow_dark">#AFB6D4</color>
+    <color name="clay_shadow_spot">#8C96BE</color>
+    <color name="clay_shadow_ambient">#66808BB5</color>
+    <color name="clay_highlight_inner">#FFFFFF</color>
+    <color name="clay_ripple">#1F6C63FF</color>
+    <color name="clay_ripple_light">#33FFFFFF</color>
+    <color name="clay_scrim">#59101427</color>
+
+    <!-- ============ Camera / 3D canvas chrome ============
+         Screens that draw over a live camera feed or a GL viewport keep a dark
+         glass treatment in both themes - light chrome is unreadable there. -->
+    <color name="canvas_black">#000000</color>
+    <color name="glass_surface">#A6121628</color>
+    <color name="glass_surface_strong">#D9121628</color>
+    <color name="glass_surface_soft">#40FFFFFF</color>
+    <color name="glass_stroke">#2EFFFFFF</color>
+    <color name="glass_stroke_strong">#4DFFFFFF</color>
+    <color name="glass_text">#FFFFFF</color>
+    <color name="glass_text_muted">#B8FFFFFF</color>
+    <color name="glass_text_dim">#80FFFFFF</color>
+    <color name="glass_accent">#7CF5DC</color>
+    <color name="glass_accent_dim">#598CF5DC</color>
+    <color name="glass_ripple">#40FFFFFF</color>
+    <color name="glass_scrim_top">#8C0A0D1A</color>
+    <color name="glass_scrim_bottom">#B30A0D1A</color>
+    <color name="glass_transparent">#000A0D1A</color>
+
+    <color name="record_idle">#FF5A72</color>
+    <color name="record_idle_dark">#E23A54</color>
+    <color name="record_active">#F5F6FB</color>
+    <color name="record_active_dark">#D6DAEA</color>
+    <color name="record_halo">#40FF5A72</color>
+
+    <!-- ============ Legacy aliases ============
+         Overlay layouts for the GL viewer and AR placement screens still point
+         at these names. They intentionally resolve to the dark canvas chrome. -->
+    <color name="bg_primary">@color/canvas_black</color>
+    <color name="bg_secondary">#121628</color>
+    <color name="card_surface">#1A2033</color>
+    <color name="card_border">#2C3350</color>
+    <color name="accent_cyan">@color/glass_accent</color>
+    <color name="accent_green">@color/clay_mint</color>
+    <color name="accent_purple">@color/clay_primary</color>
+    <color name="text_white">@color/glass_text</color>
+    <color name="text_muted">@color/glass_text_muted</color>
+    <color name="text_dim">@color/glass_text_dim</color>
+    <color name="status_online">@color/clay_mint</color>
+    <color name="status_offline">@color/clay_danger</color>
+    <color name="overlay_black_70">@color/glass_surface_strong</color>
 </resources>

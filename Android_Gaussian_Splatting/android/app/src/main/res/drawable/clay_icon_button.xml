@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Squircle clay button: raised face, hairline light rim, contained ripple. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/clay_ripple">
+    <item>
+        <shape>
+            <gradient
+                android:angle="315"
+                android:startColor="@color/clay_surface_elevated"
+                android:endColor="@color/clay_surface"
+                android:type="linear" />
+            <stroke
+                android:width="@dimen/stroke_hairline"
+                android:color="@color/clay_outline" />
+            <corners android:radius="@dimen/radius_sm" />
+        </shape>
+    </item>
+</ripple>

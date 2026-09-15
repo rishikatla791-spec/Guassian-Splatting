@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    API 28+ can tint the real (blurred) elevation shadow. That is what turns a
+    plain Material card into a claymorphic one: a soft, coloured bottom-right
+    shadow instead of a neutral grey drop shadow.
+-->
+<resources>
+    <style name="Widget.Clay.Card" parent="Widget.Material3.CardView.Elevated">
+        <item name="cardBackgroundColor">@color/clay_surface_elevated</item>
+        <item name="cardCornerRadius">@dimen/radius_lg</item>
+        <item name="cardElevation">@dimen/elev_card</item>
+        <item name="strokeWidth">@dimen/elev_flat</item>
+        <item name="rippleColor">@color/clay_ripple</item>
+        <item name="cardPreventCornerOverlap">false</item>
+        <item name="cardUseCompatPadding">false</item>
+        <item name="android:outlineSpotShadowColor">@color/clay_shadow_spot</item>
+        <item name="android:outlineAmbientShadowColor">@color/clay_shadow_ambient</item>
+    </style>
+</resources>

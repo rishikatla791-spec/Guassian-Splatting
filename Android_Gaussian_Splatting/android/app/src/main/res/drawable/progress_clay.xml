@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@android:id/background">
+        <shape>
+            <solid android:color="@color/clay_surface_sunken" />
+            <corners android:radius="@dimen/radius_pill" />
+        </shape>
+    </item>
+    <item android:id="@android:id/progress">
+        <clip>
+            <shape>
+                <gradient
+                    android:angle="0"
+                    android:startColor="@color/clay_primary"
+                    android:centerColor="@color/clay_accent"
+                    android:endColor="@color/clay_amber"
+                    android:type="linear" />
+                <corners android:radius="@dimen/radius_pill" />
+            </shape>
+        </clip>
+    </item>
+</layer-list>

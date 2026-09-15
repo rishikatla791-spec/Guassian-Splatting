@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Record pill for the capture screen. Disabled state reads as "busy" rather
+    than broken: the fill drops to frosted glass and the label greys out.
+-->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/glass_ripple">
+    <item>
+        <selector>
+            <item android:state_enabled="false">
+                <shape>
+                    <solid android:color="@color/glass_surface_strong" />
+                    <stroke
+                        android:width="@dimen/stroke_hairline"
+                        android:color="@color/glass_stroke_strong" />
+                    <corners android:radius="@dimen/radius_pill" />
+                </shape>
+            </item>
+            <item>
+                <shape>
+                    <gradient
+                        android:angle="315"
+                        android:startColor="@color/record_idle"
+                        android:endColor="@color/record_idle_dark"
+                        android:type="linear" />
+                    <stroke
+                        android:width="@dimen/stroke_thin"
+                        android:color="@color/record_halo" />
+                    <corners android:radius="@dimen/radius_pill" />
+                </shape>
+            </item>
+        </selector>
+    </item>
+</ripple>

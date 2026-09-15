@@ -1,0 +1,36 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- soft clay plinth -->
+    <path
+        android:pathData="M18,96A42,10 0 1,0 102,96A42,10 0 1,0 18,96Z"
+        android:fillColor="@color/clay_surface_sunken" />
+    <!-- outlined cube, waiting to be filled -->
+    <path
+        android:pathData="M60,22L92,40V76L60,94L28,76V40Z"
+        android:fillColor="@color/clay_surface_elevated"
+        android:strokeColor="@color/clay_outline_strong"
+        android:strokeWidth="3"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M28,40L60,58L92,40"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/clay_outline_strong"
+        android:strokeWidth="3"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M60,58V94"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/clay_outline_strong"
+        android:strokeWidth="3"
+        android:strokeLineJoin="round" />
+    <!-- sparkles hinting at what will land here -->
+    <path
+        android:pathData="M96,16L98.6,22.4L105,25L98.6,27.6L96,34L93.4,27.6L87,25L93.4,22.4Z"
+        android:fillColor="@color/clay_primary" />
+    <path
+        android:pathData="M24,58L25.8,62.2L30,64L25.8,65.8L24,70L22.2,65.8L18,64L22.2,62.2Z"
+        android:fillColor="@color/clay_accent" />
+</vector>

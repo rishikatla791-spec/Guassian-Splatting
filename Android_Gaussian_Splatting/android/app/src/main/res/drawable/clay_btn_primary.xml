@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/clay_ripple_light">
+    <item>
+        <selector>
+            <item android:state_enabled="false">
+                <shape>
+                    <solid android:color="@color/clay_surface_sunken" />
+                    <corners android:radius="@dimen/radius_pill" />
+                </shape>
+            </item>
+            <item>
+                <shape>
+                    <gradient
+                        android:angle="315"
+                        android:startColor="@color/clay_primary_light"
+                        android:centerColor="@color/clay_primary"
+                        android:endColor="@color/clay_primary_dark"
+                        android:type="linear" />
+                    <corners android:radius="@dimen/radius_pill" />
+                </shape>
+            </item>
+        </selector>
+    </item>
+</ripple>

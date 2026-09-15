@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dashed framing guide: shows the user where to keep the subject. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <stroke
+        android:width="@dimen/stroke_thin"
+        android:color="@color/glass_stroke_strong"
+        android:dashWidth="14dp"
+        android:dashGap="10dp" />
+    <corners android:radius="@dimen/radius_2xl" />
+    <solid android:color="@android:color/transparent" />
+</shape>

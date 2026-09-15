@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Reusable component styles. Layouts should reference these rather than
+    re-declaring sizes, colours or corner radii inline.
+-->
+<resources>
+
+    <!-- ==========================================================
+         TYPE SCALE
+         ========================================================== -->
+    <style name="TextAppearance.Clay" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textColor">@color/clay_text_primary</item>
+        <item name="android:includeFontPadding">false</item>
+    </style>
+
+    <style name="TextAppearance.Clay.Overline">
+        <item name="android:textSize">@dimen/text_overline</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">@dimen/letter_spacing_overline</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:textColor">@color/clay_text_tertiary</item>
+    </style>
+
+    <style name="TextAppearance.Clay.Caption">
+        <item name="android:textSize">@dimen/text_caption</item>
+        <item name="android:textColor">@color/clay_text_tertiary</item>
+    </style>
+
+    <style name="TextAppearance.Clay.Label">
+        <item name="android:textSize">@dimen/text_label</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/clay_text_secondary</item>
+    </style>
+
+    <style name="TextAppearance.Clay.Body">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:lineSpacingMultiplier">1.32</item>
+        <item name="android:textColor">@color/clay_text_secondary</item>
+    </style>
+
+    <style name="TextAppearance.Clay.BodyStrong">
+        <item name="android:textSize">@dimen/text_body_lg</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/clay_text_primary</item>
+    </style>
+
+    <style name="TextAppearance.Clay.Title">
+        <item name="android:textSize">@dimen/text_title</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">@dimen/letter_spacing_tight</item>
+        <item name="android:textColor">@color/clay_text_primary</item>
+    </style>
+
+    <style name="TextAppearance.Clay.TitleLarge">
+        <item name="android:textSize">@dimen/text_title_lg</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">@dimen/letter_spacing_tight</item>
+        <item name="android:textColor">@color/clay_text_primary</item>
+    </style>
+
+    <style name="TextAppearance.Clay.Headline">
+        <item name="android:textSize">@dimen/text_headline</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">@dimen/letter_spacing_tight</item>
+        <item name="android:lineSpacingMultiplier">1.12</item>
+        <item name="android:textColor">@color/clay_text_primary</item>
+    </style>
+
+    <style name="TextAppearance.Clay.Display">
+        <item name="android:textSize">@dimen/text_display</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">@dimen/letter_spacing_tight</item>
+        <item name="android:textColor">@color/clay_text_primary</item>
+    </style>
+
+    <!-- Type for chrome drawn on top of a camera feed / GL viewport -->
+    <style name="TextAppearance.Glass" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/glass_text</item>
+    </style>
+
+    <style name="TextAppearance.Glass.Overline">
+        <item name="android:textSize">@dimen/text_overline</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">@dimen/letter_spacing_overline</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:textColor">@color/glass_accent</item>
+    </style>
+
+    <style name="TextAppearance.Glass.Body">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:lineSpacingMultiplier">1.3</item>
+        <item name="android:textColor">@color/glass_text</item>
+    </style>
+
+    <style name="TextAppearance.Glass.Caption">
+        <item name="android:textSize">@dimen/text_caption</item>
+        <item name="android:textColor">@color/glass_text_muted</item>
+    </style>
+
+    <style name="TextAppearance.Glass.Counter">
+        <item name="android:textSize">@dimen/text_body_lg</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/glass_accent</item>
+    </style>
+
+    <!-- ==========================================================
+         CLAY SURFACES
+         ========================================================== -->
+    <style name="Widget.Clay.Card" parent="Widget.Material3.CardView.Elevated">
+        <item name="cardBackgroundColor">@color/clay_surface_elevated</item>
+        <item name="cardCornerRadius">@dimen/radius_lg</item>
+        <item name="cardElevation">@dimen/elev_card</item>
+        <item name="strokeWidth">@dimen/elev_flat</item>
+        <item name="rippleColor">@color/clay_ripple</item>
+        <item name="cardPreventCornerOverlap">false</item>
+        <item name="cardUseCompatPadding">false</item>
+    </style>
+
+    <style name="Widget.Clay.Card.Hero">
+        <item name="cardCornerRadius">@dimen/radius_xl</item>
+        <item name="cardElevation">@dimen/elev_hero</item>
+        <item name="rippleColor">@color/clay_ripple_light</item>
+    </style>
+
+    <style name="Widget.Clay.Card.Tile">
+        <item name="cardCornerRadius">@dimen/radius_md</item>
+        <item name="cardElevation">@dimen/elev_tile</item>
+    </style>
+
+    <style name="Widget.Clay.Card.Model">
+        <item name="cardCornerRadius">@dimen/radius_md</item>
+        <item name="cardElevation">@dimen/elev_tile</item>
+    </style>
+
+    <!-- ==========================================================
+         CLAY CONTROLS
+         ========================================================== -->
+    <style name="Widget.Clay.Button" parent="">
+        <item name="android:layout_height">@dimen/button_height</item>
+        <item name="android:background">@drawable/clay_btn_primary</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">@dimen/text_body_lg</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/clay_on_primary</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingStart">@dimen/space_2xl</item>
+        <item name="android:paddingEnd">@dimen/space_2xl</item>
+    </style>
+
+    <style name="Widget.Clay.Button.Ghost">
+        <item name="android:layout_height">@dimen/button_height_sm</item>
+        <item name="android:background">@drawable/clay_btn_ghost</item>
+        <item name="android:textColor">@color/clay_primary</item>
+        <item name="android:textSize">@dimen/text_body</item>
+    </style>
+
+    <style name="Widget.Clay.IconButton" parent="">
+        <item name="android:layout_width">@dimen/icon_button_size</item>
+        <item name="android:layout_height">@dimen/icon_button_size</item>
+        <item name="android:background">@drawable/clay_icon_button</item>
+        <item name="android:padding">@dimen/space_md</item>
+        <item name="android:scaleType">fitCenter</item>
+        <item name="tint">@color/clay_text_secondary</item>
+    </style>
+
+    <style name="Widget.Clay.Progress" parent="Widget.AppCompat.ProgressBar.Horizontal">
+        <item name="android:layout_height">@dimen/progress_height</item>
+        <item name="android:progressDrawable">@drawable/progress_clay</item>
+        <item name="android:indeterminateTint">@color/clay_primary</item>
+        <item name="android:indeterminateTintMode">src_in</item>
+        <item name="android:max">100</item>
+        <item name="android:minHeight">@dimen/progress_height</item>
+        <item name="android:maxHeight">@dimen/progress_height</item>
+    </style>
+
+    <style name="Widget.Glass.Progress" parent="Widget.AppCompat.ProgressBar.Horizontal">
+        <item name="android:layout_height">@dimen/progress_height</item>
+        <item name="android:progressDrawable">@drawable/progress_glass</item>
+        <item name="android:indeterminateTint">@color/glass_accent</item>
+        <item name="android:indeterminateTintMode">src_in</item>
+        <item name="android:max">100</item>
+        <item name="android:minHeight">@dimen/progress_height</item>
+        <item name="android:maxHeight">@dimen/progress_height</item>
+    </style>
+
+    <!-- ==========================================================
+         SECTION HELPERS
+         ========================================================== -->
+    <style name="Widget.Clay.SectionSpacer" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">@dimen/space_2xl</item>
+    </style>
+</resources>

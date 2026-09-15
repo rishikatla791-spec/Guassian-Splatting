@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Mobile 3DGS design tokens - DARK re-binding.
+
+    Only the clay surface / brand / text / shading tokens change. The camera
+    canvas chrome (glass_*, record_*, legacy aliases) is deliberately identical
+    in both themes because it always sits on top of a dark live image.
+-->
+<resources>
+
+    <!-- ============ Surfaces ============ -->
+    <color name="clay_bg">#0F1220</color>
+    <color name="clay_bg_tint">#151328</color>
+    <color name="clay_surface">#191E33</color>
+    <color name="clay_surface_elevated">#222842</color>
+    <color name="clay_surface_sunken">#0A0C17</color>
+    <color name="clay_outline">#2C3352</color>
+    <color name="clay_outline_strong">#3A4268</color>
+
+    <!-- ============ Brand ============ -->
+    <color name="clay_primary">#9B94FF</color>
+    <color name="clay_primary_dark">#6C63FF</color>
+    <color name="clay_primary_light">#BAB5FF</color>
+    <color name="clay_primary_soft">#2A2B55</color>
+    <color name="clay_on_primary">#14152B</color>
+
+    <color name="clay_accent">#FF97AC</color>
+    <color name="clay_accent_dark">#FF7A93</color>
+    <color name="clay_accent_soft">#3E2634</color>
+
+    <color name="clay_mint">#4EE0C4</color>
+    <color name="clay_mint_dark">#25CBAE</color>
+    <color name="clay_mint_soft">#12362F</color>
+
+    <color name="clay_amber">#FFC078</color>
+    <color name="clay_amber_soft">#3A2C1A</color>
+
+    <color name="clay_danger">#FF8093</color>
+
+    <!-- ============ Text ============ -->
+    <color name="clay_text_primary">#F1F2FB</color>
+    <color name="clay_text_secondary">#A7ADCE</color>
+    <color name="clay_text_tertiary">#6F7599</color>
+    <color name="clay_text_on_accent">#14152B</color>
+
+    <!-- ============ Claymorphic shading ============ -->
+    <color name="clay_shadow_light">#333B60</color>
+    <color name="clay_shadow_light_60">#99333B60</color>
+    <color name="clay_shadow_dark">#05060D</color>
+    <color name="clay_shadow_spot">#000000</color>
+    <color name="clay_shadow_ambient">#99000000</color>
+    <color name="clay_highlight_inner">#2E3556</color>
+    <color name="clay_ripple">#339B94FF</color>
+    <color name="clay_ripple_light">#33FFFFFF</color>
+    <color name="clay_scrim">#8C05060D</color>
+</resources>

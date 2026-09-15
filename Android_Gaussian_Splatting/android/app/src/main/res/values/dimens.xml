@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Mobile 3DGS design tokens - spacing, radii, type scale and elevation.
+    Layouts should never invent a raw dp/sp value; pick the nearest step here.
+-->
+<resources>
+
+    <!-- ============ Spacing scale (4dp base) ============ -->
+    <dimen name="space_2xs">2dp</dimen>
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_sm">8dp</dimen>
+    <dimen name="space_md">12dp</dimen>
+    <dimen name="space_lg">16dp</dimen>
+    <dimen name="space_xl">20dp</dimen>
+    <dimen name="space_2xl">24dp</dimen>
+    <dimen name="space_3xl">32dp</dimen>
+    <dimen name="space_4xl">40dp</dimen>
+    <dimen name="space_5xl">56dp</dimen>
+
+    <dimen name="screen_gutter">20dp</dimen>
+    <dimen name="screen_bottom_inset">36dp</dimen>
+
+    <!-- ============ Corner radius scale ============ -->
+    <dimen name="radius_xs">10dp</dimen>
+    <dimen name="radius_sm">14dp</dimen>
+    <dimen name="radius_md">20dp</dimen>
+    <dimen name="radius_lg">28dp</dimen>
+    <dimen name="radius_xl">34dp</dimen>
+    <dimen name="radius_2xl">44dp</dimen>
+    <dimen name="radius_pill">999dp</dimen>
+
+    <!-- ============ Type scale ============ -->
+    <dimen name="text_overline">11sp</dimen>
+    <dimen name="text_caption">12sp</dimen>
+    <dimen name="text_label">13sp</dimen>
+    <dimen name="text_body">14sp</dimen>
+    <dimen name="text_body_lg">16sp</dimen>
+    <dimen name="text_title">18sp</dimen>
+    <dimen name="text_title_lg">21sp</dimen>
+    <dimen name="text_headline">26sp</dimen>
+    <dimen name="text_display">32sp</dimen>
+
+    <!-- ============ Elevation (claymorphic soft shadow depth) ============ -->
+    <dimen name="elev_flat">0dp</dimen>
+    <dimen name="elev_pressed">2dp</dimen>
+    <dimen name="elev_tile">6dp</dimen>
+    <dimen name="elev_card">10dp</dimen>
+    <dimen name="elev_hero">18dp</dimen>
+
+    <!-- ============ Strokes ============ -->
+    <dimen name="stroke_hairline">1dp</dimen>
+    <dimen name="stroke_thin">1.5dp</dimen>
+    <dimen name="stroke_thick">3dp</dimen>
+
+    <!-- ============ Components ============ -->
+    <dimen name="icon_sm">16dp</dimen>
+    <dimen name="icon_md">22dp</dimen>
+    <dimen name="icon_lg">28dp</dimen>
+    <dimen name="icon_xl">40dp</dimen>
+    <dimen name="touch_target">48dp</dimen>
+
+    <dimen name="icon_button_size">48dp</dimen>
+    <dimen name="hero_card_min_height">176dp</dimen>
+    <dimen name="hero_glyph_size">96dp</dimen>
+    <dimen name="model_thumb_size">60dp</dimen>
+    <dimen name="empty_glyph_size">120dp</dimen>
+    <dimen name="button_height">56dp</dimen>
+    <dimen name="button_height_sm">46dp</dimen>
+    <dimen name="record_button_size">82dp</dimen>
+    <dimen name="record_ring_size">98dp</dimen>
+    <dimen name="progress_height">8dp</dimen>
+    <dimen name="capture_scrim_top">200dp</dimen>
+    <dimen name="capture_scrim_bottom">240dp</dimen>
+
+    <!-- ============ Motion ============ -->
+    <item name="letter_spacing_overline" format="float" type="dimen">0.14</item>
+    <item name="letter_spacing_tight" format="float" type="dimen">-0.01</item>
+</resources>

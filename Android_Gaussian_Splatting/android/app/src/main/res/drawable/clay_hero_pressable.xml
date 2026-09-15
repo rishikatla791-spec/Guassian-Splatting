@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hero face: brand gradient + top-left bloom, with a bright contained ripple. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/clay_ripple_light">
+    <item>
+        <layer-list>
+            <item android:drawable="@drawable/clay_hero_gradient" />
+            <item android:drawable="@drawable/clay_hero_glow" />
+        </layer-list>
+    </item>
+</ripple>

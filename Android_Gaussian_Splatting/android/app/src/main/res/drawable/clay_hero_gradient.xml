@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hero capture card: violet clay with a warm accent falling into the corner. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="300"
+        android:startColor="@color/clay_accent"
+        android:centerColor="@color/clay_primary"
+        android:endColor="@color/clay_primary_dark"
+        android:type="linear" />
+    <corners android:radius="@dimen/radius_xl" />
+</shape>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ripple-backed clay face used for tappable rows inside a MaterialCardView. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/clay_ripple">
+    <item android:drawable="@drawable/clay_surface_inner_md" />
+</ripple>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Inner face of a clay card: a light source in the top-left corner fading to
+    the plain surface tone bottom-right, plus a hairline highlight stroke.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="315"
+        android:startColor="@color/clay_highlight_inner"
+        android:centerColor="@color/clay_surface_elevated"
+        android:endColor="@color/clay_surface"
+        android:type="linear" />
+    <stroke
+        android:width="@dimen/stroke_hairline"
+        android:color="@color/clay_shadow_light_60" />
+    <corners android:radius="@dimen/radius_lg" />
+</shape>

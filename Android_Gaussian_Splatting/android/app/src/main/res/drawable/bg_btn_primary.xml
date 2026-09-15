@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Button treatment for chrome drawn over the GL viewport / AR camera feed.
+    Stays dark-glass in both themes because it never sits on a clay surface.
+-->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
-    android:color="#4000E5FF">
+    android:color="@color/glass_ripple">
     <item>
         <shape>
             <gradient
-                android:startColor="#00B0FF"
-                android:endColor="#00E5FF"
-                android:angle="45" />
-            <corners android:radius="16dp" />
+                android:angle="315"
+                android:startColor="@color/clay_primary_light"
+                android:endColor="@color/clay_primary_dark"
+                android:type="linear" />
+            <corners android:radius="@dimen/radius_pill" />
         </shape>
     </item>
 </ripple>

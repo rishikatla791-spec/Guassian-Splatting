@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Airy two-stop wash used as the window background for every screen. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="315"
+        android:startColor="@color/clay_bg"
+        android:centerColor="@color/clay_bg_tint"
+        android:endColor="@color/clay_bg"
+        android:type="linear" />
+</shape>

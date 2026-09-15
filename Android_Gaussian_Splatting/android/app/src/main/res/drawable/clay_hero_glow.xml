@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Soft specular bloom laid over the hero gradient. Radial, top-left origin,
+    so the card reads as a lump of clay lit from one side.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:centerX="0.18"
+        android:centerY="0.12"
+        android:gradientRadius="70%p"
+        android:startColor="@color/clay_ripple_light"
+        android:endColor="@android:color/transparent"
+        android:type="radial" />
+    <corners android:radius="@dimen/radius_xl" />
+</shape>

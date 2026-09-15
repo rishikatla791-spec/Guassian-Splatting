@@ -1,10 +1,106 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="Theme.Mobile3DGS" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="android:statusBarColor">@color/bg_primary</item>
-        <item name="android:navigationBarColor">@color/bg_primary</item>
-        <item name="android:windowBackground">@color/bg_primary</item>
-        <item name="colorPrimary">@color/accent_cyan</item>
-        <item name="colorSecondary">@color/accent_green</item>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ==========================================================
+         Application theme. Material 3, DayNight; the clay palette
+         lives in colors.xml and is re-bound by values-night.
+         ========================================================== -->
+    <style name="Theme.Mobile3DGS" parent="Theme.Material3.DayNight.NoActionBar">
+
+        <!-- Colour roles -->
+        <item name="colorPrimary">@color/clay_primary</item>
+        <item name="colorOnPrimary">@color/clay_on_primary</item>
+        <item name="colorPrimaryContainer">@color/clay_primary_soft</item>
+        <item name="colorOnPrimaryContainer">@color/clay_primary_dark</item>
+
+        <item name="colorSecondary">@color/clay_mint</item>
+        <item name="colorOnSecondary">@color/clay_text_on_accent</item>
+        <item name="colorSecondaryContainer">@color/clay_mint_soft</item>
+        <item name="colorOnSecondaryContainer">@color/clay_mint_dark</item>
+
+        <item name="colorTertiary">@color/clay_accent</item>
+        <item name="colorOnTertiary">@color/clay_text_on_accent</item>
+        <item name="colorTertiaryContainer">@color/clay_accent_soft</item>
+        <item name="colorOnTertiaryContainer">@color/clay_accent_dark</item>
+
+        <item name="colorError">@color/clay_danger</item>
+        <item name="colorOnError">@color/clay_text_on_accent</item>
+
+        <item name="android:colorBackground">@color/clay_bg</item>
+        <item name="colorOnBackground">@color/clay_text_primary</item>
+        <item name="colorSurface">@color/clay_surface_elevated</item>
+        <item name="colorOnSurface">@color/clay_text_primary</item>
+        <item name="colorSurfaceVariant">@color/clay_surface_sunken</item>
+        <item name="colorOnSurfaceVariant">@color/clay_text_secondary</item>
+        <item name="colorOutline">@color/clay_outline_strong</item>
+        <item name="colorOutlineVariant">@color/clay_outline</item>
+
+        <item name="android:textColorPrimary">@color/clay_text_primary</item>
+        <item name="android:textColorSecondary">@color/clay_text_secondary</item>
+        <item name="android:textColorHint">@color/clay_text_tertiary</item>
+
+        <!-- Window -->
+        <item name="android:windowBackground">@drawable/bg_window_gradient</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Camera / GL screens dominate, so default to light system icons.
+             MainActivity flips this at runtime for the light home surface. -->
+        <item name="android:windowLightStatusBar">false</item>
+
+        <!-- Motion -->
+        <item name="android:windowAnimationStyle">@style/Animation.Mobile3DGS.Activity</item>
+
+        <!-- Components -->
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.Mobile3DGS.Dialog</item>
+        <item name="materialCardViewStyle">@style/Widget.Clay.Card</item>
+    </style>
+
+    <!-- ==========================================================
+         Activity transitions. Transform + alpha only, so they stay
+         cheap on low-end GPUs.
+         ========================================================== -->
+    <style name="Animation.Mobile3DGS.Activity" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/activity_open_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/activity_open_exit</item>
+        <item name="android:activityCloseEnterAnimation">@anim/activity_close_enter</item>
+        <item name="android:activityCloseExitAnimation">@anim/activity_close_exit</item>
+    </style>
+
+    <!-- ==========================================================
+         Dialogs
+         ========================================================== -->
+    <style name="ThemeOverlay.Mobile3DGS.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.Clay.Dialog</item>
+        <item name="dialogCornerRadius">@dimen/radius_lg</item>
+        <item name="colorSurface">@color/clay_surface_elevated</item>
+        <item name="android:colorBackground">@color/clay_surface_elevated</item>
+        <item name="materialAlertDialogTitleTextStyle">@style/MaterialAlertDialog.Clay.Title</item>
+        <item name="buttonBarPositiveButtonStyle">@style/Widget.Clay.DialogButton.Filled</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Widget.Clay.DialogButton</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Widget.Clay.DialogButton</item>
+    </style>
+
+    <style name="ShapeAppearance.Clay.Dialog" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">@dimen/radius_lg</item>
+    </style>
+
+    <style name="MaterialAlertDialog.Clay.Title" parent="MaterialAlertDialog.Material3.Title.Text">
+        <item name="android:textColor">@color/clay_text_primary</item>
+        <item name="android:textSize">@dimen/text_title</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="Widget.Clay.DialogButton" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/clay_text_secondary</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+
+    <style name="Widget.Clay.DialogButton.Filled" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/clay_primary</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0</item>
     </style>
 </resources>

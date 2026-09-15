@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Keeps the status bar and top HUD legible over a bright camera image. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="270"
+        android:startColor="@color/glass_scrim_top"
+        android:endColor="@color/glass_transparent"
+        android:type="linear" />
+</shape>

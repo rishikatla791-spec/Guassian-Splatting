@@ -1,11 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
+
+    <!-- ============ App ============ -->
     <string name="app_name">Mobile 3DGS</string>
-    <string name="title_dashboard">3D Gaussian Splatting</string>
-    <string name="btn_new_scan">Start New 3D Scan</string>
-    <string name="btn_view_demo">View Sample 3D Scene</string>
-    <string name="btn_connect_pc">Connect to GPU PC</string>
-    <string name="status_ready">Ready to capture 3D scene</string>
-    <string name="capture_instruction">Slowly orbit the object to capture 360° views</string>
-    <string name="recording_frames">Captured: %1 frames</string>
-    <string name="btn_stop_capture">Finish &amp; Process Scan</string>
+    <string name="home_overline">ON-DEVICE 3DGS</string>
+    <string name="home_title">Splat Studio</string>
+
+    <!-- ============ Home: hero ============ -->
+    <string name="hero_eyebrow">NEW CAPTURE</string>
+    <string name="hero_title">Scan an object\nin real 3D</string>
+    <string name="hero_subtitle">Walk a slow orbit. Training runs entirely on this phone.</string>
+    <string name="hero_cta">Start capture</string>
+
+    <!-- ============ Home: quick actions ============ -->
+    <string name="action_import_title">Import</string>
+    <string name="action_import_subtitle">Open a .splat file</string>
+    <string name="action_quality_title">Quality</string>
+    <string name="action_quality_subtitle">Steps &amp; resolution</string>
+
+    <!-- ============ Home: gallery ============ -->
+    <string name="gallery_title">Your models</string>
+    <string name="gallery_refreshing">Scanning storage…</string>
+    <plurals name="gallery_count">
+        <item quantity="one">%1$d model</item>
+        <item quantity="other">%1$d models</item>
+    </plurals>
+
+    <string name="empty_title">Nothing captured yet</string>
+    <string name="empty_body">Trained Gaussian splats will collect here. Start a capture and the whole pipeline — frames, poses, optimization — runs on device.</string>
+    <string name="empty_cta">Capture your first object</string>
+
+    <!-- ============ Home: model card ============ -->
+    <string name="model_meta_size">%1$s MB</string>
+    <string name="model_meta_gaussians">%1$s splats</string>
+    <string name="model_open">Open</string>
+
+    <!-- ============ Home: live training banner ============ -->
+    <string name="training_title">Training on device</string>
+    <string name="training_progress">Step %1$d · %2$d%%</string>
+    <string name="training_preparing">Warming up the optimizer…</string>
+    <string name="training_hint">Keep using your phone — progress continues in the background.</string>
+    <string name="training_done">Training complete</string>
+    <string name="training_failed">Training stopped before it finished</string>
+
+    <!-- ============ Home: footer ============ -->
+    <string name="footer_engine">Vulkan compute · fully on-device</string>
+    <string name="device_profile">%1$s · %2$s GB RAM</string>
+
+    <!-- ============ Dialogs: quality ============ -->
+    <string name="dialog_quality_title">Quality &amp; iterations</string>
+    <string name="dialog_quality_message">More steps means sharper splats and a longer, hotter run.</string>
+    <string name="toast_quality_saved">Target set: %1$s</string>
+    <string name="quality_summary_instant">Direct photometric (~2s)</string>
+    <string name="quality_summary_steps">%1$d steps · %2$dp</string>
+
+    <string-array name="quality_options">
+        <item>Direct photometric — instant, ~2s, no GPU work</item>
+        <item>300 steps — fast draft, ~45s, 360p</item>
+        <item>1,000 steps — quick test, ~3 min, 720p</item>
+        <item>3,000 steps — preview, ~8 min, 720p</item>
+        <item>7,000 steps — balanced, ~20 min, 1080p</item>
+        <item>15,000 steps — high quality, ~45 min, 1080p</item>
+    </string-array>
+
+    <!-- ============ Dialogs: model actions ============ -->
+    <string name="dialog_model_actions_title">%1$s</string>
+    <string name="action_view_3d">Open 3D viewport</string>
+    <string name="action_place_ar">Place in the real world (AR)</string>
+    <string name="action_retrain">Re-train this capture</string>
+
+    <!-- ============ Dialogs: re-train ============ -->
+    <string name="dialog_retrain_title">Re-train %1$s</string>
+    <string name="dialog_retrain_message">Re-runs optimization on the frames and poses already stored for this capture — no rescan needed.</string>
+    <string-array name="retrain_options">
+        <item>Fast — 1,500 steps @ 720p (~4 min)</item>
+        <item>Normal — 3,000 steps @ 720p (~8 min)</item>
+        <item>High — 7,000 steps @ 720p (~18 min)</item>
+        <item>Max — 7,000 steps @ 1080p (~40 min, runs hot)</item>
+    </string-array>
+    <string name="retrain_model_name">%1$s (%2$d steps)</string>
+
+    <!-- ============ Common actions ============ -->
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_start">Start</string>
+
+    <!-- ============ Toasts ============ -->
+    <string name="toast_import_success">Imported — opening viewer</string>
+    <string name="toast_import_failed">Could not import that file: %1$s</string>
+    <string name="toast_training_started">Training started — progress is in the notification shade</string>
+    <string name="toast_model_missing">That model file is no longer on disk</string>
+    <string name="imported_model_name">Imported model</string>
+
+    <!-- ============ Capture screen ============ -->
+    <string name="capture_overline">LIVE CAPTURE</string>
+    <string name="capture_status_default">Orbit slowly around the object for full 360° coverage</string>
+    <string name="capture_frame_count_default">0 Frames</string>
+    <string name="capture_record_start">Start 3D Scan</string>
+    <string name="capture_tip_title">Keep it steady</string>
+    <string name="capture_tip_body">Bright, even light · one slow lap · keep the subject centred</string>
+    <string name="capture_reticle_hint">Centre the subject</string>
+
+    <!-- ============ Viewer / AR overlays ============ -->
+    <string name="viewer_title_default">3D Gaussian Splat</string>
+    <string name="ar_title_default">AR world placement</string>
+    <string name="ar_status_default">Point the camera at a flat surface (floor or table)…</string>
+    <string name="ar_scale_toggle">Scale: 1:1 metric</string>
+    <string name="ar_reset_anchor">Reset anchor</string>
+
+    <!-- ============ Content descriptions ============ -->
+    <string name="cd_settings">Quality settings</string>
+    <string name="cd_capture">Start a new capture</string>
+    <string name="cd_model_thumbnail">Model preview</string>
+    <string name="cd_open_model">Open model</string>
+    <string name="cd_close">Close</string>
+    <string name="cd_record">Start or stop recording</string>
+    <string name="cd_empty_illustration">No models yet</string>
 </resources>

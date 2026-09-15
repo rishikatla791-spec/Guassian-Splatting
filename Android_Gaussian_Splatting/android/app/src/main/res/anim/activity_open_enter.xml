@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Incoming screen rises and settles. Transform + alpha only. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/fast_out_slow_in"
+    android:zAdjustment="top">
+    <alpha
+        android:fromAlpha="0.0"
+        android:toAlpha="1.0"
+        android:duration="220" />
+    <translate
+        android:fromYDelta="6%p"
+        android:toYDelta="0"
+        android:duration="300" />
+    <scale
+        android:fromXScale="0.94"
+        android:toXScale="1.0"
+        android:fromYScale="0.94"
+        android:toYScale="1.0"
+        android:pivotX="50%p"
+        android:pivotY="60%p"
+        android:duration="300" />
+</set>

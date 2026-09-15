@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Frosted slab for chrome sitting on top of the live camera image. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="315"
+        android:startColor="@color/glass_surface_strong"
+        android:endColor="@color/glass_surface"
+        android:type="linear" />
+    <stroke
+        android:width="@dimen/stroke_hairline"
+        android:color="@color/glass_stroke" />
+    <corners android:radius="@dimen/radius_lg" />
+</shape>

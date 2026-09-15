@@ -6,329 +6,391 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
-import android.widget.*
+import android.view.ViewGroup
+import android.widget.ImageView
+import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.splat.mobile3dgs.capture.CaptureActivity
-import com.splat.mobile3dgs.model.RemoteModel
-import com.splat.mobile3dgs.network.ApiClient
+import com.splat.mobile3dgs.engine.TrainingService
+import com.splat.mobile3dgs.hardware.DeviceCapabilityManager
 import com.splat.mobile3dgs.viewer.ViewerActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.text.DateFormat
+import java.util.Date
 
+/**
+ * Home screen: start a capture, browse finished models, and watch training.
+ *
+ * There is no server, cloud or desktop component -- capture, optimization and
+ * viewing all happen on this device -- so nothing here touches the network.
+ */
 class MainActivity : AppCompatActivity() {
-    private lateinit var btnImportCustomDataset: Button
-    private lateinit var btnScan: Button
-    private lateinit var btnServerSettings: Button
-    private lateinit var tvServerStatus: TextView
-    private lateinit var listViewModels: ListView
+
+    private lateinit var rvModels: RecyclerView
     private lateinit var progressBar: ProgressBar
+    private lateinit var layoutEmpty: View
+    private lateinit var tvModelCount: TextView
+    private lateinit var tvDeviceStatus: TextView
 
-    private val apiClient = ApiClient()
-    private val modelList = mutableListOf<RemoteModel>()
-    private lateinit var adapter: ArrayAdapter<String>
+    private lateinit var cardTraining: View
+    private lateinit var tvTrainingPct: TextView
+    private lateinit var tvTrainingState: TextView
+    private lateinit var progressTraining: ProgressBar
 
-    // SAF Document Picker for .splat files
-    private val pickFileLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        uri?.let { handleImportedFile(it) }
-    }
+    private val models = mutableListOf<LocalModel>()
+    private lateinit var adapter: ModelAdapter
+
+    /** A finished .splat on disk, plus the capture it came from if still present. */
+    data class LocalModel(
+        val file: File,
+        val name: String,
+        val sizeMb: Double,
+        val gaussians: Long,
+        val modifiedAt: Long,
+        val datasetDir: File?
+    )
+
+    private val pickFileLauncher =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+            uri?.let { handleImportedFile(it) }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        btnImportCustomDataset = findViewById(R.id.btn_import_custom_dataset)
-        btnScan = findViewById(R.id.btn_new_scan)
-        btnServerSettings = findViewById(R.id.btn_server_settings)
-        tvServerStatus = findViewById(R.id.tv_server_status)
-        listViewModels = findViewById(R.id.lv_models)
+        rvModels = findViewById(R.id.rv_models)
         progressBar = findViewById(R.id.pb_loading_models)
+        layoutEmpty = findViewById(R.id.layout_empty)
+        tvModelCount = findViewById(R.id.tv_model_count)
+        tvDeviceStatus = findViewById(R.id.tv_device_status)
+        cardTraining = findViewById(R.id.card_training)
+        tvTrainingPct = findViewById(R.id.tv_training_pct)
+        tvTrainingState = findViewById(R.id.tv_training_state)
+        progressTraining = findViewById(R.id.progress_training)
 
-        adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, mutableListOf())
-        listViewModels.adapter = adapter
+        adapter = ModelAdapter(models) { openModel(it) }
+        rvModels.layoutManager = LinearLayoutManager(this)
+        rvModels.adapter = adapter
+        rvModels.isNestedScrollingEnabled = false
 
-        // 1. Primary: Start Real-Time 3D Camera Scan
-        btnScan.setOnClickListener {
-            startActivity(Intent(this, CaptureActivity::class.java))
-        }
+        findViewById<View>(R.id.card_capture_hero).setOnClickListener { startCapture() }
+        findViewById<View>(R.id.btn_empty_capture).setOnClickListener { startCapture() }
+        findViewById<View>(R.id.card_import).setOnClickListener { pickFileLauncher.launch("*/*") }
+        findViewById<View>(R.id.card_quality).setOnClickListener { showQualityDialog() }
+        findViewById<View>(R.id.btn_quality_settings).setOnClickListener { showQualityDialog() }
 
-        // 2. Secondary: Import local .splat file
-        btnImportCustomDataset.setOnClickListener {
-            pickFileLauncher.launch("*/*")
-        }
-
-        // 3. Configure Quality and Training Steps
-        btnServerSettings.setOnClickListener {
-            showQualityDialog()
-        }
-
-        listViewModels.setOnItemClickListener { _, _, position, _ ->
-            if (position < modelList.size) {
-                val model = modelList[position]
-                openModel(model)
-            }
-        }
-
-        loadScansAndStatus()
+        cardTraining.visibility = View.GONE
+        showDeviceProfile()
     }
 
     override fun onResume() {
         super.onResume()
-        loadScansAndStatus()
+        // Training runs in a foreground service, so it can still be going while
+        // this screen is reopened -- keep the progress card live either way.
+        TrainingService.progressListener = { step, pct ->
+            runOnUiThread { showTrainingProgress(step, pct) }
+        }
+        TrainingService.doneListener = { ok, _ ->
+            runOnUiThread { showTrainingDone(ok) }
+        }
+        loadModels()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        TrainingService.progressListener = null
+        TrainingService.doneListener = null
+    }
+
+    private fun startCapture() {
+        startActivity(Intent(this, CaptureActivity::class.java))
+    }
+
+    private fun showDeviceProfile() {
+        val profile = DeviceCapabilityManager.getDeviceProfile(this)
+        tvDeviceStatus.text = getString(
+            R.string.device_profile,
+            profile.tier.tierName,
+            "%.1f".format(profile.totalRamGb)
+        )
+    }
+
+    // ---------------------------------------------------------------- models
+
+    private fun loadModels() {
+        progressBar.visibility = View.VISIBLE
+        lifecycleScope.launch(Dispatchers.IO) {
+            val external = getExternalFilesDir(null)
+
+            // Models placed beside the app (for example pushed over adb) are adopted
+            // into internal storage so the gallery has a single source of truth.
+            external?.listFiles { f -> f.isFile && f.name.endsWith(".splat") && f.length() > 0 }
+                ?.forEach { ext ->
+                    val dest = File(filesDir, ext.name)
+                    if (!dest.exists() || dest.length() != ext.length()) {
+                        runCatching { ext.copyTo(dest, overwrite = true) }
+                    }
+                }
+
+            val found = (filesDir.listFiles { f ->
+                f.isFile && f.name.endsWith(".splat") && f.length() > 0
+            } ?: emptyArray())
+                .map { f ->
+                    val base = f.nameWithoutExtension
+                    val dataset = external?.let { File(it, base) }
+                        ?.takeIf { File(it, "transforms.json").exists() }
+                    LocalModel(
+                        file = f,
+                        name = base,
+                        sizeMb = f.length() / (1024.0 * 1024.0),
+                        gaussians = f.length() / SPLAT_STRIDE,
+                        modifiedAt = f.lastModified(),
+                        datasetDir = dataset
+                    )
+                }
+                .sortedByDescending { it.modifiedAt }
+
+            withContext(Dispatchers.Main) {
+                models.clear()
+                models.addAll(found)
+                adapter.notifyDataSetChanged()
+                progressBar.visibility = View.GONE
+                layoutEmpty.visibility = if (found.isEmpty()) View.VISIBLE else View.GONE
+                rvModels.visibility = if (found.isEmpty()) View.GONE else View.VISIBLE
+                tvModelCount.text = found.size.toString()
+            }
+        }
     }
 
     private fun handleImportedFile(uri: Uri) {
         progressBar.visibility = View.VISIBLE
         lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val destFile = File(filesDir, "imported_${System.currentTimeMillis()}.splat")
+            val result = runCatching {
+                val dest = File(filesDir, "imported_" + System.currentTimeMillis() + ".splat")
                 contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(destFile).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                withContext(Dispatchers.Main) {
-                    progressBar.visibility = View.GONE
-                    Toast.makeText(this@MainActivity, "Imported successfully!", Toast.LENGTH_SHORT).show()
-                    val intent = Intent(this@MainActivity, ViewerActivity::class.java).apply {
-                        putExtra("MODEL_NAME", "Imported 3D Model")
-                        putExtra("MODEL_PATH", destFile.absolutePath)
-                    }
-                    startActivity(intent)
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    progressBar.visibility = View.GONE
-                    Toast.makeText(this@MainActivity, "Import error: " + (e.message ?: ""), Toast.LENGTH_LONG).show()
+                    FileOutputStream(dest).use { output -> input.copyTo(output) }
+                } ?: error("could not open the selected file")
+                dest
+            }
+            withContext(Dispatchers.Main) {
+                progressBar.visibility = View.GONE
+                result.onSuccess { dest ->
+                    Toast.makeText(this@MainActivity, R.string.toast_import_success, Toast.LENGTH_SHORT).show()
+                    openViewer(getString(R.string.imported_model_name), dest)
+                    loadModels()
+                }.onFailure {
+                    Toast.makeText(this@MainActivity, R.string.toast_import_failed, Toast.LENGTH_LONG).show()
                 }
             }
         }
     }
 
-    private fun showQualityDialog() {
-        val prefs = getSharedPreferences("Mobile3DGS_Prefs", Context.MODE_PRIVATE)
-        val currentSteps = prefs.getInt("PREF_TRAINING_STEPS", 3000)
-
-        // Timings measured on a Snapdragon 8 Gen 2 (SM8550): ~8 steps/s initially,
-        // degrading to ~6 steps/s once densification and thermal throttling kick in.
-        val stepOptions = arrayOf(
-            "Direct Photometric (Instant - ~2s, Zero GPU)",
-            "300 Steps (Fast Standalone - ~45s, 360p)",
-            "1,000 Steps (Quick test - ~3 min, 720p)",
-            "3,000 Steps (Preview - ~8 min, 720p)",
-            "7,000 Steps (Balanced - ~20 min, 1080p)",
-            "15,000 Steps (High quality - ~45 min, 1080p)"
-        )
-        val stepValues = intArrayOf(0, 300, 1000, 3000, 7000, 15000)
-        // Default to a real training run, not the instant photometric placeholder --
-        // landing on index 0 made "Save" silently disable training.
-        var selectedIndex = stepValues.indexOf(currentSteps).let { if (it >= 0) it else 3 }
+    private fun openModel(model: LocalModel) {
+        if (!model.file.exists() || model.file.length() == 0L) {
+            Toast.makeText(this, R.string.toast_model_missing, Toast.LENGTH_SHORT).show()
+            loadModels()
+            return
+        }
+        val canRetrain = model.datasetDir != null
+        val options = if (canRetrain) {
+            arrayOf(
+                getString(R.string.action_view_3d),
+                getString(R.string.action_place_ar),
+                getString(R.string.action_retrain)
+            )
+        } else {
+            arrayOf(
+                getString(R.string.action_view_3d),
+                getString(R.string.action_place_ar)
+            )
+        }
 
         AlertDialog.Builder(this)
-            .setTitle("⚙️ 3DGS Quality & Iterations")
-            .setSingleChoiceItems(stepOptions, selectedIndex) { _, which ->
-                selectedIndex = which
-            }
-            .setPositiveButton("Save") { dialog, _ ->
-                val chosenSteps = stepValues[selectedIndex]
-                val chosenRes = when {
-                    chosenSteps >= 7000 -> 1080
-                    chosenSteps >= 1000 -> 720
-                    else -> 360
+            .setTitle(model.name)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> openViewer(model.name, model.file)
+                    1 -> startActivity(
+                        Intent(this, com.splat.mobile3dgs.ar.ARPlacementActivity::class.java).apply {
+                            putExtra("MODEL_NAME", model.name)
+                            putExtra("MODEL_PATH", model.file.absolutePath)
+                        }
+                    )
+                    2 -> model.datasetDir?.let { showRetrainDialog(model, it) }
                 }
-                prefs.edit()
-                    .putInt("PREF_TRAINING_STEPS", chosenSteps)
-                    .putInt("PREF_TRAINING_RES", chosenRes)
-                    .apply()
-                val desc = if (chosenSteps == 0) "Direct Photometric (~2s)" else "$chosenSteps steps (${chosenRes}p)"
-                Toast.makeText(this, "Target: $desc", Toast.LENGTH_SHORT).show()
-                dialog.dismiss()
             }
-            .setNeutralButton("Cloud Server IP") { dialog, _ ->
-                dialog.dismiss()
-                showCloudIpDialog()
-            }
-            .setNegativeButton("Cancel") { dialog, _ -> dialog.dismiss() }
+            .setNegativeButton(R.string.action_cancel, null)
             .show()
     }
 
-    private fun showCloudIpDialog() {
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_server_config, null)
-        val etServerIp = dialogView.findViewById<EditText>(R.id.et_server_ip)
-        val btnCancel = dialogView.findViewById<Button>(R.id.btn_dialog_cancel)
-        val btnConnect = dialogView.findViewById<Button>(R.id.btn_dialog_connect)
-
-        etServerIp.setText(apiClient.getServerUrl())
-
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .create()
-
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-
-        btnCancel.setOnClickListener {
-            dialog.dismiss()
-        }
-
-        btnConnect.setOnClickListener {
-            val url = etServerIp.text.toString().trim()
-            if (url.isNotEmpty()) {
-                apiClient.setServerUrl(url)
-                loadScansAndStatus()
-            }
-            dialog.dismiss()
-        }
-
-        dialog.show()
+    private fun openViewer(name: String, file: File) {
+        startActivity(Intent(this, ViewerActivity::class.java).apply {
+            putExtra("MODEL_NAME", name)
+            putExtra("MODEL_PATH", file.absolutePath)
+        })
     }
 
-    /** Re-run optimization on an existing capture at a chosen quality. */
-    private fun showRetrainDialog(model: RemoteModel, datasetDir: File) {
-        val labels = arrayOf(
-            "Fast  - 1500 steps @ 720p  (~4 min)",
-            "Normal - 3000 steps @ 720p  (~8 min)",
-            "High  - 7000 steps @ 720p  (~18 min)",
-            "Max   - 7000 steps @ 1080p (~40 min, hot)"
-        )
+    // --------------------------------------------------------------- quality
+
+    private fun showQualityDialog() {
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val stepValues = intArrayOf(0, 300, 1000, 3000, 7000, 15000)
+        val current = prefs.getInt(PREF_STEPS, 3000)
+        // Never land on the instant photometric option by default: it disables
+        // training, so pressing Save without looking would silently switch it off.
+        var selected = stepValues.indexOf(current).let { if (it >= 0) it else 3 }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.dialog_quality_title)
+            .setSingleChoiceItems(R.array.quality_options, selected) { _, which -> selected = which }
+            .setPositiveButton(R.string.action_save) { dialog, _ ->
+                val steps = stepValues[selected]
+                val res = when {
+                    steps >= 7000 -> 1080
+                    steps >= 1000 -> 720
+                    else -> 360
+                }
+                prefs.edit().putInt(PREF_STEPS, steps).putInt(PREF_RES, res).apply()
+                val summary = if (steps == 0) {
+                    getString(R.string.quality_summary_instant)
+                } else {
+                    getString(R.string.quality_summary_steps, steps, res)
+                }
+                Toast.makeText(this, getString(R.string.toast_quality_saved, summary), Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    /** Re-optimize an existing capture; its frames and poses are still on disk. */
+    private fun showRetrainDialog(model: LocalModel, datasetDir: File) {
         val steps = intArrayOf(1500, 3000, 7000, 7000)
         val res = intArrayOf(720, 720, 720, 1080)
         var choice = 1
 
         AlertDialog.Builder(this)
-            .setTitle("Re-train " + model.name)
-            .setSingleChoiceItems(labels, choice) { _, w -> choice = w }
-            .setPositiveButton("Start") { d, _ ->
-                val out = File(filesDir, model.filename)
-                com.splat.mobile3dgs.engine.TrainingService.start(
+            .setTitle(R.string.dialog_retrain_title)
+            .setMessage(R.string.dialog_retrain_message)
+            .setSingleChoiceItems(R.array.retrain_options, choice) { _, w -> choice = w }
+            .setPositiveButton(R.string.action_start) { dialog, _ ->
+                showTrainingProgress(0, 0)
+                TrainingService.start(
                     context = this,
                     datasetPath = datasetDir.absolutePath,
-                    outputPath = out.absolutePath,
+                    outputPath = model.file.absolutePath,
                     steps = steps[choice],
                     resolution = res[choice],
-                    modelName = model.name + " (" + steps[choice] + " steps)"
+                    modelName = getString(R.string.retrain_model_name, model.name, steps[choice])
                 )
-                Toast.makeText(
-                    this,
-                    "Training started - progress is in the notification shade",
-                    Toast.LENGTH_LONG
-                ).show()
-                d.dismiss()
+                Toast.makeText(this, R.string.toast_training_started, Toast.LENGTH_LONG).show()
+                dialog.dismiss()
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(R.string.action_cancel, null)
             .show()
     }
 
-    private fun loadScansAndStatus() {
-        progressBar.visibility = View.VISIBLE
-        val profile = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getDeviceProfile(this)
-        tvServerStatus.text = "${profile.tier.tierName} • ${"%.1f".format(profile.totalRamGb)}GB"
-        tvServerStatus.setTextColor(getColor(R.color.accent_green))
+    // -------------------------------------------------------------- training
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            // Automatically unpack default 3D models from assets on first run or if missing
-            val bundledModels = listOf(
-                "truck.splat" to "viewer/truck.splat",
-                "train.splat" to "viewer/train.splat",
-                "room.splat" to "viewer/room.splat",
-                "photoreal_demo.splat" to "viewer/demo.splat"
+    private fun showTrainingProgress(step: Int, pct: Int) {
+        if (cardTraining.visibility != View.VISIBLE) {
+            cardTraining.alpha = 0f
+            cardTraining.visibility = View.VISIBLE
+            cardTraining.animate().alpha(1f).setDuration(220).start()
+        }
+        tvTrainingPct.text = pct.toString() + "%"
+        progressTraining.isIndeterminate = false
+        progressTraining.progress = pct
+        tvTrainingState.text = if (step <= 0) {
+            getString(R.string.training_preparing)
+        } else {
+            getString(R.string.training_progress, step, pct)
+        }
+    }
+
+    private fun showTrainingDone(ok: Boolean) {
+        tvTrainingState.setText(if (ok) R.string.training_done else R.string.training_failed)
+        if (ok) progressTraining.progress = 100
+        cardTraining.animate().alpha(0f).setStartDelay(2500).setDuration(300)
+            .withEndAction {
+                cardTraining.visibility = View.GONE
+                cardTraining.alpha = 1f
+                loadModels()
+            }.start()
+    }
+
+    // --------------------------------------------------------------- adapter
+
+    private class ModelAdapter(
+        private val items: List<LocalModel>,
+        private val onClick: (LocalModel) -> Unit
+    ) : RecyclerView.Adapter<ModelAdapter.VH>() {
+
+        private val thumbs = intArrayOf(
+            R.drawable.clay_thumb_mint,
+            R.drawable.clay_thumb_violet,
+            R.drawable.clay_thumb_coral
+        )
+        private var lastAnimated = -1
+
+        class VH(v: View) : RecyclerView.ViewHolder(v) {
+            val card: View = v.findViewById(R.id.card_model)
+            val thumb: ImageView = v.findViewById(R.id.thumb_model)
+            val name: TextView = v.findViewById(R.id.tv_model_name)
+            val gaussians: TextView = v.findViewById(R.id.tv_model_gaussians)
+            val size: TextView = v.findViewById(R.id.tv_model_size)
+            val date: TextView = v.findViewById(R.id.tv_model_date)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH = VH(
+            LayoutInflater.from(parent.context).inflate(R.layout.item_model, parent, false)
+        )
+
+        override fun getItemCount(): Int = items.size
+
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val m = items[position]
+            val ctx = holder.itemView.context
+            holder.name.text = m.name
+            holder.gaussians.text = ctx.getString(
+                R.string.model_meta_gaussians, String.format("%,d", m.gaussians)
             )
-            for ((filename, assetPath) in bundledModels) {
-                val dest = File(filesDir, filename)
-                if (!dest.exists() || dest.length() == 0L) {
-                    try {
-                        assets.open(assetPath).use { input ->
-                            FileOutputStream(dest).use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        // Optional asset
-                    }
-                }
-            }
+            holder.size.text = ctx.getString(R.string.model_meta_size, "%.1f".format(m.sizeMb))
+            holder.date.text = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(m.modifiedAt))
+            holder.thumb.setImageResource(thumbs[position % thumbs.size])
+            holder.card.setOnClickListener { onClick(m) }
 
-            // Also import any .splat files placed in external app storage (e.g. via USB MTP)
-            getExternalFilesDir(null)?.let { extDir ->
-                extDir.listFiles { f -> f.isFile && f.name.endsWith(".splat") && f.length() > 0 }?.forEach { extFile ->
-                    val target = File(filesDir, extFile.name)
-                    if (!target.exists() || target.length() != extFile.length()) {
-                        try {
-                            extFile.copyTo(target, overwrite = true)
-                        } catch (_: Exception) {}
-                    }
-                }
-            }
-
-            // Find all local captured and imported models
-            val localSplats = filesDir.listFiles { file ->
-                file.isFile && file.name.endsWith(".splat") && file.length() > 0
-            } ?: emptyArray()
-
-            val localModels = localSplats.map { file ->
-                val sizeMb = file.length() / (1024.0 * 1024.0)
-                RemoteModel(name = file.nameWithoutExtension, filename = file.name, sizeMb = sizeMb)
-            }.sortedByDescending { it.filename }
-
-            withContext(Dispatchers.Main) {
-                modelList.clear()
-                modelList.addAll(localModels)
-
-                val names = localModels.map { "📱 ${it.name} (${String.format("%.1f", it.sizeMb)} MB)" }
-                adapter.clear()
-                adapter.addAll(names)
-                adapter.notifyDataSetChanged()
-                progressBar.visibility = View.GONE
+            // Stagger cards in on first appearance only, so scrolling stays still.
+            if (position > lastAnimated) {
+                lastAnimated = position
+                holder.itemView.alpha = 0f
+                holder.itemView.translationY = 24f
+                holder.itemView.animate()
+                    .alpha(1f)
+                    .translationY(0f)
+                    .setStartDelay((position % 6) * 40L)
+                    .setDuration(260)
+                    .start()
             }
         }
     }
 
-    private fun openModel(model: RemoteModel) {
-        val localFile = File(filesDir, model.filename)
-        if (localFile.exists() && localFile.length() > 0) {
-            // A capture keeps its images, poses and seed cloud on disk, so it can be
-            // re-optimized with different settings without walking around the subject
-            // again -- a failed or over-long run no longer costs a rescan.
-            val datasetDir = File(getExternalFilesDir(null), model.name)
-            val canRetrain = File(datasetDir, "transforms.json").exists()
-
-            val options = if (canRetrain) arrayOf(
-                "🎮 Open 3D Viewport (Orbit, Measure & Crop)",
-                "👓 Place Model in Real World (AR Placement)",
-                "⚡ Re-train this capture (no rescan)"
-            ) else arrayOf(
-                "🎮 Open 3D Viewport (Orbit, Measure & Crop)",
-                "👓 Place Model in Real World (AR Placement)"
-            )
-            AlertDialog.Builder(this)
-                .setTitle(model.name)
-                .setItems(options) { _, which ->
-                    when (which) {
-                        0 -> {
-                            val intent = Intent(this, ViewerActivity::class.java).apply {
-                                putExtra("MODEL_NAME", model.name)
-                                putExtra("MODEL_PATH", localFile.absolutePath)
-                            }
-                            startActivity(intent)
-                        }
-                        1 -> {
-                            val intent = Intent(this, com.splat.mobile3dgs.ar.ARPlacementActivity::class.java).apply {
-                                putExtra("MODEL_NAME", model.name)
-                                putExtra("MODEL_PATH", localFile.absolutePath)
-                            }
-                            startActivity(intent)
-                        }
-                        2 -> showRetrainDialog(model, datasetDir)
-                    }
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        } else {
-            Toast.makeText(this, "Model file not found.", Toast.LENGTH_SHORT).show()
-        }
+    companion object {
+        private const val PREFS = "Mobile3DGS_Prefs"
+        private const val PREF_STEPS = "PREF_TRAINING_STEPS"
+        private const val PREF_RES = "PREF_TRAINING_RES"
+        private const val SPLAT_STRIDE = 32L
     }
 }
