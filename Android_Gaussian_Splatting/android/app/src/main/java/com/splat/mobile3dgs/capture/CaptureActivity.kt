@@ -4,9 +4,13 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CameraMetadata
 import android.media.Image
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -89,6 +93,20 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var lastKeptQuat: FloatArray? = null
     private val keptPositions = ArrayList<FloatArray>()
     private val keptQuats = ArrayList<FloatArray>()
+
+    /**
+     * Sharpness / exposure gate. A motion-blurred keyframe is worse than no
+     * keyframe at all: the optimizer treats its smeared pixels as ground truth
+     * and bakes the smear permanently into the Gaussians.
+     */
+    private val frameQualityFilter = FrameQualityFilter()
+    @Volatile private var lastQualityHintMs = 0L
+
+    /** OpenCV [k1, k2, p1, p2] read once from Camera2, or null on a device that reports none. */
+    @Volatile private var lensDistortion: FloatArray? = null
+
+    /** Last detailed engine result, so a failure dialog can name the actual cause. */
+    @Volatile private var lastTrainingResult: com.splat.mobile3dgs.engine.TrainingResult? = null
     @Volatile private var keptFrameCount = 0
 
     /**
@@ -135,6 +153,9 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         private const val REQUEST_CODE_NOTIFICATIONS = 11
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
 
+        /** Minimum gap between on-screen capture-quality hints, so they stay readable. */
+        private const val QUALITY_HINT_INTERVAL_MS = 1500L
+
         // A candidate is redundant if some kept view is within BOTH of these.
         // Views must be separated by an ANGLE about the subject, not a fixed
         // distance. A flat 6 cm is a 13 degree arc when orbiting an object at 26 cm
@@ -177,6 +198,31 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 ActivityCompat.requestPermissions(this, arrayOf(notifPerm), REQUEST_CODE_NOTIFICATIONS)
             }
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // ARCore holds the camera until the session is paused. Leaving it running
+        // in the background drains the battery and, worse, makes the NEXT resume
+        // fail with the camera already in use -- which previously looked like an
+        // ARCore incompatibility. Training deliberately keeps running: it is a
+        // foreground service and no longer needs the camera.
+        if (!trainingActive) releaseCaptureResources()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // These listeners live in a companion object, so a stale lambda would keep
+        // this Activity (and its GL surface) alive for the life of the process.
+        // Training that outlives this screen reports through its notification.
+        TrainingService.progressListener = null
+        TrainingService.doneListener = null
+        TrainingService.resultListener = null
+        // The ARCore Session is deliberately NOT closed here. It is a process-wide
+        // singleton (ARCore permits exactly one) that later launches reuse, and
+        // closing one whose camera never resumed aborts the process with an
+        // uncatchable SIGABRT. Pausing is enough to free the camera.
+        if (isFinishing && !trainingActive) releaseCaptureResources()
     }
 
     override fun onRequestPermissionsResult(
@@ -446,6 +492,52 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         imgW = dims[0]; imgH = dims[1]
         haveIntrinsics = true
         Log.i(TAG, "Intrinsics: fx=$fx fy=$fy cx=$cx cy=$cy (${imgW}x${imgH})")
+        lensDistortion = readLensDistortion()
+    }
+
+    /**
+     * Read the lens distortion the camera reports, mapped into OpenCV's convention.
+     *
+     * ARCore's `imageIntrinsics` is a pure pinhole model and the CPU image it hands
+     * out is NOT undistorted, so a dataset that declares `camera_model: "OPENCV"`
+     * without coefficients tells the trainer the lens is perfect and bakes a
+     * systematic, radially growing error into everything near the frame border.
+     *
+     * Android's `LENS_DISTORTION` is defined in NORMALISED camera coordinates:
+     *   x_c = x(1 + k1 r^2 + k2 r^4 + k3 r^6) + kappa_4(2xy) + kappa_5(r^2 + 2x^2)
+     * and OpenCV's is
+     *   x_d = x(1 + k1 r^2 + k2 r^4 + k3 r^6) + 2 p1 x y + p2(r^2 + 2x^2)
+     * so k1..k3 map straight across and p1 = kappa_4, p2 = kappa_5. Being
+     * normalised, the coefficients survive whatever crop/scale ARCore applies
+     * between the sensor array and the CPU image, provided the reported focal
+     * length and principal point are used with them -- they are, both come from
+     * `imageIntrinsics` above.
+     */
+    private fun readLensDistortion(): FloatArray? {
+        // LENS_DISTORTION was added in API 28; older devices report nothing.
+        if (Build.VERSION.SDK_INT < 28) return null
+        return try {
+            val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraId = sharedSession?.cameraConfig?.cameraId
+                ?: manager.cameraIdList.firstOrNull { id ->
+                    manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
+                            CameraMetadata.LENS_FACING_BACK
+                }
+                ?: return null
+            val d = manager.getCameraCharacteristics(cameraId)
+                .get(CameraCharacteristics.LENS_DISTORTION)
+            if (d == null || d.size < 5 || !d.all { it.isFinite() }) {
+                Log.i(TAG, "Camera $cameraId reports no LENS_DISTORTION; using pinhole model")
+                return null
+            }
+            floatArrayOf(d[0], d[1], d[3], d[4]).also {
+                Log.i(TAG, "Lens distortion (camera $cameraId): k1=${it[0]} k2=${it[1]} " +
+                        "p1=${it[2]} p2=${it[3]} (k3=${d[2]} dropped, OPENCV uses 4)")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not read lens distortion: ${t.message}")
+            null
+        }
     }
 
     private fun maybeCaptureKeyframe(frame: Frame) {
@@ -491,11 +583,32 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             return
         }
 
+        // Reject blurred / badly exposed frames BEFORE paying for JPEG encoding
+        // and depth unprojection, and before they are recorded as covered
+        // viewpoints -- otherwise a blurred frame both costs training time and
+        // blocks the sharp frame that follows it from the same angle.
+        val quality = frameQualityFilter.evaluateFrameQuality(image)
+        if (!quality.isPassed) {
+            image.close()
+            val hint = when (quality.verdict) {
+                FrameQualityFilter.Verdict.MOTION_BLUR -> "Hold steadier — move more slowly"
+                FrameQualityFilter.Verdict.UNDEREXPOSED -> "Too dark — add more light"
+                FrameQualityFilter.Verdict.OVEREXPOSED -> "Too bright — avoid direct glare"
+                else -> null
+            }
+            val now = System.currentTimeMillis()
+            if (hint != null && now - lastQualityHintMs > QUALITY_HINT_INTERVAL_MS) {
+                lastQualityHintMs = now
+                runOnUiThread { if (isRecording) tvStatus.text = hint }
+            }
+            return
+        }
+
         val jpeg: ByteArray
-        val meanLum: Float
+        // Luminance already measured by the gate above; no second full-plane pass.
+        val meanLum: Float = quality.meanLuminance
         try {
             jpeg = YuvToJpeg.toJpeg(image)
-            meanLum = YuvToJpeg.meanLuminance(image)
         } catch (e: Exception) {
             Log.w(TAG, "YUV->JPEG failed: ${e.message}")
             image.close()
@@ -643,6 +756,8 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         pMinY = Float.MAX_VALUE; pMaxY = -Float.MAX_VALUE
         pMinZ = Float.MAX_VALUE; pMaxZ = -Float.MAX_VALUE
         pendingSaves.set(0)
+        frameQualityFilter.reset()
+        lastQualityHintMs = 0L
 
         val profile = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getDeviceProfile(this)
         // Cap on FREE RAM rather than the SoC label: training memory is driven by
@@ -664,6 +779,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     private fun stopRecordingSession() {
         isRecording = false
+        Log.i(TAG, "Frame quality: ${frameQualityFilter.summary()}")
         btnRecord.isEnabled = false
         btnRecord.text = "Processing..."
         progressBar.visibility = View.VISIBLE
@@ -733,7 +849,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 withContext(Dispatchers.Main) {
                     tvStatus.text = "Writing dataset ($frameCount keyframes, $depthSeeds depth points)..."
                 }
-                datasetExporter.exportDataset(fx, fy, cx, cy, imgW, imgH)
+                datasetExporter.exportDataset(fx, fy, cx, cy, imgW, imgH, lensDistortion)
 
                 val profile = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getDeviceProfile(this@CaptureActivity)
                 val isTier3 = (profile.tier == com.splat.mobile3dgs.hardware.HardwareTier.TIER_3_STANDALONE)
@@ -806,6 +922,11 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                             progressBar.progress = pct
                         }
                     }
+                    // The engine only ever returns exit code 0/1; TrainingService
+                    // attributes that to a phase and attaches whatever the engine
+                    // printed to stderr. Keep it so the dialog below can say WHY
+                    // rather than "could not run on this device".
+                    TrainingService.resultListener = { r -> lastTrainingResult = r }
                     TrainingService.doneListener = { ok, path ->
                         runOnUiThread {
                             progressBar.visibility = View.GONE
@@ -827,11 +948,19 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                                     AlertDialog.Builder(this@CaptureActivity)
                                         .setTitle("Training failed")
                                         .setMessage(
-                                            "The GPU optimizer could not run on this device, so no " +
-                                            "reconstructed model was produced. Your capture is saved " +
-                                            "and can be re-trained later from the model list. " +
-                                            "A rough $directSplatCount-point preview exists, but it is " +
-                                            "NOT a trained 3D model and will look like scattered dots."
+                                            buildString {
+                                                append("The GPU optimizer could not run on this device, so no ")
+                                                append("reconstructed model was produced. Your capture is saved ")
+                                                append("and can be re-trained later from the model list. ")
+                                                append("A rough $directSplatCount-point preview exists, but it is ")
+                                                append("NOT a trained 3D model and will look like scattered dots.")
+                                                lastTrainingResult?.let { r ->
+                                                    appendLine()
+                                                    appendLine()
+                                                    appendLine("Reason (${r.errorCode}):")
+                                                    append(r.message)
+                                                }
+                                            }
                                         )
                                         .setPositiveButton("View rough preview") { _, _ ->
                                             startActivity(Intent(this@CaptureActivity, ViewerActivity::class.java).apply {

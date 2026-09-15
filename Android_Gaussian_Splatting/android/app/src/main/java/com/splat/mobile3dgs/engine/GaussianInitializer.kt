@@ -300,6 +300,17 @@ object GaussianInitializer {
             currentVoxelSize *= scaleFactor
             filteredPoints = voxelFilter(rawList, currentVoxelSize)
         }
+        // One voxel resize is not a guarantee -- an uneven cloud can still land
+        // over budget, and the budget is what keeps a mid-range device from
+        // running out of memory. Strided decimation makes it a hard ceiling.
+        if (maxGaussians > 0 && filteredPoints.size > maxGaussians) {
+            val keepStep = (filteredPoints.size + maxGaussians - 1) / maxGaussians
+            filteredPoints = filteredPoints.filterIndexed { idx, _ -> idx % keepStep == 0 }
+            android.util.Log.i(
+                "GaussianInitializer",
+                "Clamped photometric model to ${filteredPoints.size} Gaussians (budget $maxGaussians)"
+            )
+        }
         val numPoints = filteredPoints.size
         if (numPoints == 0) return 0
 

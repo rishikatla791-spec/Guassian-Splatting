@@ -252,7 +252,17 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
      * 1. transforms.json
      * 2. points3D_initial.json
      */
-    fun exportDataset(fx: Float, fy: Float, cx: Float, cy: Float, width: Int, height: Int): File {
+    /**
+     * @param distortion optional OpenCV coefficients [k1, k2, p1, p2]. Declaring
+     *   `camera_model: "OPENCV"` while supplying none makes brush build a
+     *   RadialTangential8 model with all-zero terms -- i.e. a perfect pinhole --
+     *   so real barrel distortion is left baked into every image and shows up as
+     *   a radially growing error towards the frame border.
+     */
+    fun exportDataset(
+        fx: Float, fy: Float, cx: Float, cy: Float, width: Int, height: Int,
+        distortion: FloatArray? = null
+    ): File {
         val rootJson = JSONObject()
         val fovX = 2.0 * Math.atan((width / (2.0 * fx)).toDouble())
         val fovY = 2.0 * Math.atan((height / (2.0 * fy)).toDouble())
@@ -266,6 +276,16 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
         rootJson.put("w", width)
         rootJson.put("h", height)
         rootJson.put("camera_model", "OPENCV")
+        if (distortion != null && distortion.size >= 4 && distortion.all { it.isFinite() }) {
+            rootJson.put("k1", distortion[0].toDouble())
+            rootJson.put("k2", distortion[1].toDouble())
+            rootJson.put("p1", distortion[2].toDouble())
+            rootJson.put("p2", distortion[3].toDouble())
+            android.util.Log.i("DatasetExporter", "Lens distortion: k1=${distortion[0]} k2=${distortion[1]} " +
+                    "p1=${distortion[2]} p2=${distortion[3]}")
+        } else {
+            android.util.Log.i("DatasetExporter", "No lens distortion reported by the device; training as a pinhole camera")
+        }
         rootJson.put("system_source", "ARCore_6DoF_SLAM")
 
         val framesArray = JSONArray()

@@ -28,8 +28,31 @@ data class TrainingProfile(
     val supportsDirectPhotometricSplat: Boolean = true
 )
 
+/**
+ * How hard the training thread should be duty-cycled right now.
+ *
+ * [throttleMs] is slept inside the native progress callback, which fires roughly
+ * every 5 training steps; [paused] holds the thread until conditions improve.
+ */
+data class DutyCycle(
+    val throttleMs: Int,
+    val paused: Boolean,
+    val reason: String
+) {
+    val isFullSpeed: Boolean get() = throttleMs == 0 && !paused
+}
+
+/** Whether a run may start at all. */
+data class StartVerdict(val allowed: Boolean, val reason: String)
+
 object DeviceCapabilityManager {
     private const val TAG = "DeviceCapabilityManager"
+
+    /** Below this (and not charging) a run is refused outright. */
+    const val MIN_START_BATTERY_PCT = 20
+
+    /** Below this (and not charging) an in-flight run is held. */
+    const val PAUSE_BATTERY_PCT = 15
 
     fun getDeviceProfile(context: Context): TrainingProfile {
         val totalRamGb = getTotalRamGb(context)
@@ -99,6 +122,40 @@ object DeviceCapabilityManager {
         }
     }
 
+    /**
+     * Refinement cadence to actually hand the engine for a given budget.
+     *
+     * The engine's C ABI has no Gaussian cap (`TrainConfig::max_splats` is not
+     * reachable through `TrainOptions`, has no env binding, and the `args.txt`
+     * config `brush-process` would otherwise honour is discarded by `brush-c`).
+     * Densification therefore only happens on refinement ticks, so the cadence
+     * is the one growth lever we have: stretching it cuts the number of
+     * densification events, which is what produced a 578k-splat overfit on a
+     * device budgeted for 80k.
+     *
+     * This is a damping heuristic, not a hard cap -- the hard cap is applied by
+     * decimating the finished model before it is published.
+     */
+    fun refineEveryFor(profile: TrainingProfile): Int {
+        val base = profile.refineEvery.coerceAtLeast(50)
+        return when (profile.tier) {
+            HardwareTier.TIER_1_FLAGSHIP -> base
+            HardwareTier.TIER_2_BALANCED -> (base * 1.5f).toInt()
+            HardwareTier.TIER_3_STANDALONE -> base * 3
+        }.coerceIn(50, 2000)
+    }
+
+    /**
+     * Checkpoint cadence: frequent enough that a killed run loses little, rare
+     * enough that PLY serialisation does not dominate the step time.
+     */
+    fun exportEveryFor(profile: TrainingProfile, steps: Int): Int {
+        val target = maxOf(500, steps / 5)
+        // Never checkpoint *less* often than the device profile asks for.
+        val hinted = if (profile.exportEvery > 0) minOf(target, maxOf(profile.exportEvery, 100)) else target
+        return hinted.coerceIn(1, maxOf(1, steps))
+    }
+
     fun getTotalRamGb(context: Context): Float {
         val actManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
         val memInfo = ActivityManager.MemoryInfo()
@@ -121,13 +178,82 @@ object DeviceCapabilityManager {
         return if (level >= 0 && scale > 0) (level * 100) / scale else 100
     }
 
-    fun isThermalThrottling(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            val thermalStatus = powerManager?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE
-            return thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE
+    fun isCharging(context: Context): Boolean {
+        return try {
+            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            val status = context.registerReceiver(null, filter)
+                ?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+            status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == BatteryManager.BATTERY_STATUS_FULL
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not read charging state: ${e.message}")
+            false
         }
-        return false
+    }
+
+    /**
+     * Raw `PowerManager` thermal status (0 NONE .. 6 SHUTDOWN), or 0 on API < 29
+     * where the signal does not exist.
+     */
+    fun getThermalStatus(context: Context): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            return pm?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE
+        }
+        return PowerManager.THERMAL_STATUS_NONE
+    }
+
+    fun isThermalThrottling(context: Context): Boolean =
+        getThermalStatus(context) >= PowerManager.THERMAL_STATUS_SEVERE
+
+    /**
+     * Duty cycle for the current thermal + battery state.
+     *
+     * Sustained training halves throughput purely from heat (measured ~3.0 ->
+     * ~1.4 steps/s), and past that the SoC throttles everything including the
+     * UI. Backing off early keeps the average higher than being throttled by
+     * the kernel, and keeps the phone usable.
+     */
+    fun currentDutyCycle(context: Context): DutyCycle {
+        val battery = getBatteryLevel(context)
+        val charging = isCharging(context)
+
+        if (battery < PAUSE_BATTERY_PCT && !charging) {
+            return DutyCycle(0, true, "Paused: battery $battery% (resumes above $PAUSE_BATTERY_PCT% or on charge)")
+        }
+
+        return when (getThermalStatus(context)) {
+            // NONE / LIGHT: the device is coping.
+            0, 1 -> DutyCycle(0, false, "Running at full speed")
+            // MODERATE: shed a little load before the kernel does it for us.
+            2 -> DutyCycle(250, false, "Easing off: device is warm")
+            // SEVERE: throughput is already collapsing; back off hard.
+            3 -> DutyCycle(1200, false, "Slowed down: device is hot")
+            // CRITICAL and worse: stop entirely until it cools.
+            else -> DutyCycle(0, true, "Paused: device is too hot, waiting to cool")
+        }
+    }
+
+    /** Whether a new run may start right now. */
+    fun canStartTraining(context: Context): StartVerdict {
+        val battery = getBatteryLevel(context)
+        val charging = isCharging(context)
+        if (battery < MIN_START_BATTERY_PCT && !charging) {
+            return StartVerdict(
+                false,
+                "Battery is $battery%. Training needs at least $MIN_START_BATTERY_PCT% " +
+                    "or a charger -- a full run can take tens of minutes at high load."
+            )
+        }
+        val thermal = getThermalStatus(context)
+        if (thermal >= 4) {
+            return StartVerdict(
+                false,
+                "The device is too hot to start training (thermal status $thermal). " +
+                    "Let it cool down and try again."
+            )
+        }
+        return StartVerdict(true, "")
     }
 
     private fun getSocModel(): String {
