@@ -67,6 +67,14 @@ android {
     buildFeatures {
         viewBinding true
     }
+
+    // Pure-JVM tests exercise real app logic (splat/PLY serialisation, depth
+    // unprojection, pose conventions). Android framework calls those paths do
+    // not depend on -- android.util.Log in particular -- must no-op rather than
+    // throw "Method ... not mocked".
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -88,4 +96,7 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.mockito:mockito-core:5.11.0'
 }

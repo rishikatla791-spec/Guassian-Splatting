@@ -63,7 +63,13 @@ object DepthPointExtractor {
         if (dw <= 0 || dh <= 0) return FloatArray(0)
 
         val depthPlane = depthImage.planes[0]
-        val depthBuf = depthPlane.buffer
+        // DEPTH16 samples are 16-bit little-endian on every Android device, but the
+        // byte order of the buffer handed back by Image.Plane is not specified --
+        // a plain java.nio direct buffer defaults to BIG_ENDIAN. Reading with the
+        // wrong order byte-swaps every sample (500 mm reads as 62 m), which does
+        // not throw: the points simply fall outside the usable range and the cloud
+        // silently collapses. Pin it, as the official ARCore depth samples do.
+        val depthBuf = depthPlane.buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN)
         val depthRowStride = depthPlane.rowStride
         val depthPixStride = depthPlane.pixelStride
 
