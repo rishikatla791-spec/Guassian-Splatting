@@ -96,6 +96,59 @@ object GaussianInitializer {
      * depth-derived cloud, where allocating one object per point would cost
      * tens of megabytes on a mid-range device.
      */
+    /**
+     * Write the seed cloud with real colour and a real per-point size.
+     *
+     * Positions alone are not enough: the engine defaults every missing property
+     * (import.rs:81-86), so an x/y/z-only cloud starts as identical 1.8 cm mid-grey
+     * blobs regardless of whether a point is 30 cm or 8 m away. Supplying the colour
+     * we already sampled from the photo and a size derived from depth lets the
+     * optimizer begin near the answer instead of rediscovering both.
+     *
+     * @param rgb 0..1 per channel, parallel to [xyz]
+     * @param logScale natural-log metres, as the PLY format stores scale
+     */
+    fun writeSeedPly(
+        xyz: FloatArray,
+        rgb: FloatArray,
+        logScale: FloatArray,
+        count: Int,
+        outputFile: File
+    ): Int {
+        if (count <= 0) return 0
+        val header = listOf(
+            "ply",
+            "format binary_little_endian 1.0",
+            "element vertex $count",
+            "property float x",
+            "property float y",
+            "property float z",
+            "property uchar red",
+            "property uchar green",
+            "property uchar blue",
+            "property float scale_0",
+            "property float scale_1",
+            "property float scale_2",
+            "end_header"
+        ).joinToString(separator = "\n", postfix = "\n")
+
+        // 12 bytes position + 3 bytes colour + 12 bytes scale
+        val body = ByteBuffer.allocate(count * 27).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until count) {
+            body.putFloat(xyz[i * 3]); body.putFloat(xyz[i * 3 + 1]); body.putFloat(xyz[i * 3 + 2])
+            body.put((rgb[i * 3] * 255f).toInt().coerceIn(0, 255).toByte())
+            body.put((rgb[i * 3 + 1] * 255f).toInt().coerceIn(0, 255).toByte())
+            body.put((rgb[i * 3 + 2] * 255f).toInt().coerceIn(0, 255).toByte())
+            val ls = if (logScale[i].isFinite()) logScale[i] else -4.0f
+            body.putFloat(ls); body.putFloat(ls); body.putFloat(ls)
+        }
+        FileOutputStream(outputFile).use { out ->
+            out.write(header.toByteArray(Charsets.US_ASCII))
+            out.write(body.array())
+        }
+        return count
+    }
+
     fun writePlyFromXyz(xyz: FloatArray, count: Int, outputFile: File): Int {
         if (count <= 0) return 0
         val header = listOf(

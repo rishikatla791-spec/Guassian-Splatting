@@ -383,7 +383,16 @@ Java_com_splat_mobile3dgs_engine_NativeBrushEngine_nativeTrainAndSave(
     options.total_train_steps = (uint32_t)iterations;
     options.refine_every = 100;
     options.max_resolution = (uint32_t)(max_resolution > 0 ? max_resolution : 720);
-    options.export_every = (uint32_t)iterations;
+    // Export periodically, not just at the very end. A run killed by the user,
+    // the thermal governor or the low-memory killer previously lost ALL of its
+    // work -- a 73%-complete run left an empty exports/ directory. Periodic
+    // checkpoints make a long run interruptible and previewable, and give
+    // find_latest_ply() something to fall back to.
+    uint32_t export_interval = (uint32_t)iterations / 5;
+    if (export_interval < 500) export_interval = 500;
+    if (export_interval > (uint32_t)iterations) export_interval = (uint32_t)iterations;
+    options.export_every = export_interval;
+    LOGI("Checkpoint interval: every %u steps", export_interval);
     options.output_path = export_dir.c_str();
 
     TrainExitCode result = train_fn(

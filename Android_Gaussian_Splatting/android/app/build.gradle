@@ -17,7 +17,12 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            abiFilters 'arm64-v8a'
+            // x86_64 is included so the app installs on the Android Emulator, whose
+            // virtual-scene camera can drive ARCore. The prebuilt training engine
+            // (libbrush_c.so) is arm64-only, so the emulator can exercise the whole
+            // capture/pose/seeding path and export a dataset, then report the engine
+            // as unavailable -- which is enough to test everything before training.
+            abiFilters 'arm64-v8a', 'x86_64'
         }
         externalNativeBuild {
             cmake {

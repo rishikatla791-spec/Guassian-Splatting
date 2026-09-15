@@ -87,6 +87,8 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     // Motion gate — pose of the last kept keyframe.
     private var lastKeptPos: FloatArray? = null
     private var lastKeptQuat: FloatArray? = null
+    private val keptPositions = ArrayList<FloatArray>()
+    private val keptQuats = ArrayList<FloatArray>()
     @Volatile private var keptFrameCount = 0
 
     /**
@@ -99,6 +101,12 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     @Volatile private var frameLimitNotified = false
     @Volatile private var depthLogged = false
     @Volatile private var depthEnabled = false
+    // Live extent of the camera path, so the user can be told to actually move.
+    private var pMinX = Float.MAX_VALUE; private var pMaxX = -Float.MAX_VALUE
+    private var pMinY = Float.MAX_VALUE; private var pMaxY = -Float.MAX_VALUE
+    private var pMinZ = Float.MAX_VALUE; private var pMaxZ = -Float.MAX_VALUE
+    /** Running estimate of subject distance, from the depth map's central median. */
+    @Volatile private var subjectDistEstimate = 0f
     @Volatile private var sessionResumed = false
     @Volatile private var trainingActive = false
 
@@ -127,9 +135,15 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         private const val REQUEST_CODE_NOTIFICATIONS = 11
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
 
-        // Keyframe motion thresholds (real ARCore metric poses).
-        private const val MIN_TRANSLATION_M = 0.02f      // 2 cm
-        private const val MIN_ROTATION_RAD = 0.052f       // ~3 degrees
+        // A candidate is redundant if some kept view is within BOTH of these.
+        // Views must be separated by an ANGLE about the subject, not a fixed
+        // distance. A flat 6 cm is a 13 degree arc when orbiting an object at 26 cm
+        // (so a full circle allowed only ~27 frames and most candidates were
+        // discarded) while being almost nothing for a subject 3 m away.
+        private const val VIEW_SEPARATION_RAD_ABOUT_SUBJECT = 0.07f  // ~4 degrees of arc
+        private const val MIN_VIEW_SEPARATION_FLOOR_M = 0.015f
+        private const val MIN_VIEW_SEPARATION_CEIL_M = 0.30f
+        private const val MIN_VIEW_SEPARATION_RAD = 0.105f  // ~6 degrees of camera turn
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -450,12 +464,22 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         val pos = floatArrayOf(pose.tx(), pose.ty(), pose.tz())
         val quat = floatArrayOf(pose.qx(), pose.qy(), pose.qz(), pose.qw()) // [x, y, z, w]
 
-        val prevPos = lastKeptPos
-        val prevQuat = lastKeptQuat
-        if (prevPos != null && prevQuat != null) {
-            val dist = distance(pos, prevPos)
-            val angle = quaternionAngle(quat, prevQuat)
-            if (dist < MIN_TRANSLATION_M && angle < MIN_ROTATION_RAD) return
+        // Keep a frame only if it is a genuinely NEW viewpoint compared with every
+        // frame already kept -- not merely different from the previous one. Comparing
+        // against only the last frame let a slow sweep back over the same arc add
+        // hundreds of near-duplicate views (179 frames in ~10s, 52% of them pure
+        // turns), which inflated training time without adding any information.
+        // Arc length that corresponds to a few degrees about the subject.
+        val sepM = if (subjectDistEstimate > 0.05f) {
+            (subjectDistEstimate * VIEW_SEPARATION_RAD_ABOUT_SUBJECT)
+                .coerceIn(MIN_VIEW_SEPARATION_FLOOR_M, MIN_VIEW_SEPARATION_CEIL_M)
+        } else {
+            MIN_VIEW_SEPARATION_FLOOR_M
+        }
+        for (i in keptPositions.indices) {
+            val d = distance(pos, keptPositions[i])
+            val a = quaternionAngle(quat, keptQuats[i])
+            if (d < sepM && a < MIN_VIEW_SEPARATION_RAD) return
         }
 
         val image: Image = try {
@@ -476,9 +500,9 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             Log.w(TAG, "YUV->JPEG failed: ${e.message}")
             image.close()
             return
-        } finally {
-            image.close()
         }
+        // NOTE: `image` deliberately stays open past this point so seed colours can
+        // be sampled from it during depth extraction; it is closed in the finally below.
 
         val poseMatrix = FloatArray(16)
         pose.toMatrix(poseMatrix, 0)
@@ -507,6 +531,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         var depthPts: FloatArray? = null
         var depthImage: Image? = null
         var confImage: Image? = null
+        var usedRawDepth = false
         try {
             // Prefer the SMOOTHED depth map: it is inpainted and dense, whereas raw
             // depth only returns high-confidence pixels and leaves most of the map
@@ -516,15 +541,20 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             } catch (e: NotYetAvailableException) {
                 null
             } catch (e: Throwable) {
-                try { frame.acquireRawDepthImage16Bits() } catch (e2: Throwable) { null }
+                try { frame.acquireRawDepthImage16Bits().also { usedRawDepth = true } }
+                catch (e2: Throwable) { null }
             }
             if (depthImage != null) {
-                // Only raw depth ships a confidence map; smoothed depth is fully valid.
-                confImage = try { frame.acquireRawDepthConfidenceImage() } catch (e: Throwable) { null }
-                if (confImage != null &&
-                    (confImage.width != depthImage.width || confImage.height != depthImage.height)) {
-                    confImage.close()
-                    confImage = null
+                // The confidence map describes RAW depth. The smoothed map is already
+                // inpainted and valid everywhere, so masking it with raw confidence
+                // discards almost every sample.
+                if (usedRawDepth) {
+                    confImage = try { frame.acquireRawDepthConfidenceImage() } catch (e: Throwable) { null }
+                    if (confImage != null &&
+                        (confImage.width != depthImage.width || confImage.height != depthImage.height)) {
+                        confImage.close()
+                        confImage = null
+                    }
                 }
                 val intr = frame.camera.imageIntrinsics
                 depthPts = DepthPointExtractor.extractWorldPoints(
@@ -533,12 +563,21 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     focal = intr.focalLength,
                     principal = intr.principalPoint,
                     imageDims = intr.imageDimensions,
-                    cameraPose = pose
+                    cameraPose = pose,
+                    colorImage = image
                 )
+                if (DepthPointExtractor.lastSubjectDepth > 0.05f) {
+                    subjectDistEstimate = if (subjectDistEstimate <= 0f) {
+                        DepthPointExtractor.lastSubjectDepth
+                    } else {
+                        subjectDistEstimate * 0.8f + DepthPointExtractor.lastSubjectDepth * 0.2f
+                    }
+                }
                 if (!depthLogged) {
                     depthLogged = true
                     Log.i(TAG, "Depth seeding active: ${depthImage.width}x${depthImage.height} " +
-                            "conf=${confImage != null} -> ${(depthPts?.size ?: 0) / 4} points/frame")
+                            "raw=$usedRawDepth conf=${confImage != null} -> " +
+                            "${(depthPts?.size ?: 0) / 4} points/frame [${DepthPointExtractor.lastStats()}]")
                 }
             } else if (!depthLogged) {
                 depthLogged = true
@@ -549,12 +588,18 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         } finally {
             depthImage?.close()
             confImage?.close()
+            image.close()
         }
 
         val timestamp = frame.timestamp
         lastKeptPos = pos
         lastKeptQuat = quat
+        keptPositions.add(pos)
+        keptQuats.add(quat)
         keptFrameCount++
+        if (pos[0] < pMinX) pMinX = pos[0]; if (pos[0] > pMaxX) pMaxX = pos[0]
+        if (pos[1] < pMinY) pMinY = pos[1]; if (pos[1] > pMaxY) pMaxY = pos[1]
+        if (pos[2] < pMinZ) pMinZ = pos[2]; if (pos[2] > pMaxZ) pMaxZ = pos[2]
         pendingSaves.incrementAndGet()
 
         val ptsForSave = pointsCopy
@@ -591,17 +636,25 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         lastKeptPos = null
         lastKeptQuat = null
         keptFrameCount = 0
+        keptPositions.clear()
+        keptQuats.clear()
         frameLimitNotified = false
+        pMinX = Float.MAX_VALUE; pMaxX = -Float.MAX_VALUE
+        pMinY = Float.MAX_VALUE; pMaxY = -Float.MAX_VALUE
+        pMinZ = Float.MAX_VALUE; pMaxZ = -Float.MAX_VALUE
         pendingSaves.set(0)
 
         val profile = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getDeviceProfile(this)
-        maxKeyframes = when (profile.tier) {
-            com.splat.mobile3dgs.hardware.HardwareTier.TIER_1_FLAGSHIP -> 200
-            com.splat.mobile3dgs.hardware.HardwareTier.TIER_2_BALANCED -> 120
-            com.splat.mobile3dgs.hardware.HardwareTier.TIER_3_STANDALONE -> 70
-        }
+        // Cap on FREE RAM rather than the SoC label: training memory is driven by
+        // (frames x resolution), and a mid-range chip with memory to spare should not
+        // be limited to a handful of frames just because of its model number. An
+        // explicit quality choice raises the ceiling further.
         val availGb = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getAvailableRamGb(this)
-        Log.i(TAG, "Capture start: tier=${profile.tier.tierName} availRam=${"%.1f".format(availGb)}GB maxKeyframes=$maxKeyframes")
+        val prefsK = getSharedPreferences("Mobile3DGS_Prefs", Context.MODE_PRIVATE)
+        val userChoseQuality = prefsK.contains("PREF_TRAINING_STEPS")
+        maxKeyframes = (availGb * 60f).toInt().coerceIn(60, if (userChoseQuality) 250 else 150)
+        Log.i(TAG, "Capture start: tier=${profile.tier.tierName} availRam=${"%.1f".format(availGb)}GB " +
+                "maxKeyframes=$maxKeyframes userChoseQuality=$userChoseQuality")
 
         isRecording = true
 
@@ -632,6 +685,48 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                         Toast.makeText(this@CaptureActivity, "Need at least ~8 keyframes. Try a slower, wider orbit.", Toast.LENGTH_LONG).show()
                     }
                     return@launch
+                }
+
+                // Spend the seed budget on the subject, not the room behind it.
+                datasetExporter.isolateSubject()
+
+                val quality = datasetExporter.computeQuality()
+                Log.i(TAG, "Capture quality: frames=${quality.frames} baseline=" +
+                        "${"%.2f".format(quality.baselineM)}m depth=${"%.2f".format(quality.medianDepthM)}m " +
+                        "ratio=${"%.3f".format(quality.parallaxRatio)} tri=${"%.1f".format(quality.triangulationDeg)}deg " +
+                        "rotationOnly=${quality.rotationOnlyPct}%")
+
+                // 3DGS recovers depth from parallax. If the camera barely moved relative
+                // to how far away the scene is, depth is unrecoverable and extra
+                // iterations only overfit -- so say so BEFORE spending 20 minutes.
+                if (quality.isDegenerate && quality.frames >= 2) {
+                    val proceed = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                    withContext(Dispatchers.Main) {
+                        AlertDialog.Builder(this@CaptureActivity)
+                            .setTitle("Not enough camera movement")
+                            .setMessage(
+                                "The camera only moved " + "%.0f".format(quality.baselineM * 100) +
+                                " cm while the scene is about " + "%.1f".format(quality.medianDepthM) +
+                                " m away (about " + "%.1f".format(quality.triangulationDeg) +
+                                "° of parallax; 3D needs roughly 10-15°)." + "\n\n" +
+                                quality.rotationOnlyPct + "% of frames were turns rather than steps." +
+                                "\n\n" +
+                                "Training will still run, but depth cannot be recovered from this and " +
+                                "the result will look smeared. Walk around the subject instead of " +
+                                "turning on the spot."
+                            )
+                            .setPositiveButton("Scan again") { _, _ -> proceed.complete(false) }
+                            .setNegativeButton("Train anyway") { _, _ -> proceed.complete(true) }
+                            .setCancelable(false)
+                            .show()
+                    }
+                    if (!proceed.await()) {
+                        withContext(Dispatchers.Main) {
+                            resetRecordUi()
+                            tvStatus.text = "Walk around the subject, keeping it centred"
+                        }
+                        return@launch
+                    }
                 }
 
                 val depthSeeds = datasetExporter.depthPointCount()
@@ -669,7 +764,11 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 val targetResolution = prefs.getInt("PREF_TRAINING_RES", profile.maxResolution)
 
                 // If native engine is NOT available, or user requested 0 steps (instant), or if this is Tier 3 without explicit steps:
-                val shouldUseDirectModelImmediately = (!isNativeVulkanReady) || (targetIterations == 0) || (isTier3 && !userExplicitSteps)
+                // Only skip real training when the engine is genuinely unavailable or
+                // the user explicitly asked for the instant photometric model. Skipping
+                // it because of the SoC tier silently returned a few hundred splats that
+                // look like coloured dots, with no indication training never ran.
+                val shouldUseDirectModelImmediately = (!isNativeVulkanReady) || (targetIterations == 0)
 
                 if (shouldUseDirectModelImmediately) {
                     withContext(Dispatchers.Main) {
@@ -718,14 +817,31 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                                 })
                                 finish()
                             } else {
-                                // Graceful fallback: Open the direct photometric splat model if training didn't produce a new one
+                                // Training failed. The photometric placeholder was written
+                                // BEFORE training, so it always exists -- silently opening it
+                                // presents a few hundred coloured dots as if it were a result.
+                                // Say plainly that training failed and let the user decide.
                                 if (outputSplat.exists() && outputSplat.length() > 0) {
-                                    Toast.makeText(this@CaptureActivity, "Opening direct on-device 3D model!", Toast.LENGTH_SHORT).show()
-                                    startActivity(Intent(this@CaptureActivity, ViewerActivity::class.java).apply {
-                                        putExtra("MODEL_NAME", "Standalone 3D Model ($directSplatCount splats)")
-                                        putExtra("MODEL_PATH", outputSplat.absolutePath)
-                                    })
-                                    finish()
+                                    resetRecordUi()
+                                    tvStatus.text = "Training failed on this device"
+                                    AlertDialog.Builder(this@CaptureActivity)
+                                        .setTitle("Training failed")
+                                        .setMessage(
+                                            "The GPU optimizer could not run on this device, so no " +
+                                            "reconstructed model was produced. Your capture is saved " +
+                                            "and can be re-trained later from the model list. " +
+                                            "A rough $directSplatCount-point preview exists, but it is " +
+                                            "NOT a trained 3D model and will look like scattered dots."
+                                        )
+                                        .setPositiveButton("View rough preview") { _, _ ->
+                                            startActivity(Intent(this@CaptureActivity, ViewerActivity::class.java).apply {
+                                                putExtra("MODEL_NAME", "UNTRAINED preview ($directSplatCount points)")
+                                                putExtra("MODEL_PATH", outputSplat.absolutePath)
+                                            })
+                                            finish()
+                                        }
+                                        .setNegativeButton("Back", null)
+                                        .show()
                                 } else {
                                     resetRecordUi()
                                     tvStatus.text = "Training finished (no output produced)"
@@ -768,7 +884,11 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     private fun updateStatusText(tracking: Boolean) {
         if (isRecording) {
-            runOnUiThread { tvFrameCount.text = "$keptFrameCount Frames" }
+            val spanCm = if (pMaxX > pMinX) {
+                val dx = pMaxX - pMinX; val dy = pMaxY - pMinY; val dz = pMaxZ - pMinZ
+                (sqrt(dx * dx + dy * dy + dz * dz) * 100f).toInt()
+            } else 0
+            runOnUiThread { tvFrameCount.text = "$keptFrameCount Frames | moved ${spanCm}cm" }
         } else if (!tracking) {
             runOnUiThread { tvStatus.text = "Move phone slowly to start tracking..." }
         }

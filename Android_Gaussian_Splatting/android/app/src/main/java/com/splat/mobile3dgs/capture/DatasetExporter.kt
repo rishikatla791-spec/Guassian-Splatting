@@ -40,11 +40,92 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
     private val depthVoxelSize = 0.01f
     private val maxDepthPoints = 250_000
 
-    /** @param pts flat [x, y, z, confidence, ...] in world space. */
+    /**
+     * How usable this capture actually is for 3D reconstruction.
+     *
+     * 3DGS recovers depth from parallax, so what matters is not how many frames
+     * were taken but how far the camera *moved* relative to how far away the
+     * scene is. Panning on the spot produces a triangulation angle near zero,
+     * where depth is mathematically unrecoverable and extra iterations only
+     * overfit -- the optimizer densifies into billboard soup that looks right
+     * from the capture position and wrong from anywhere else.
+     */
+    data class CaptureQuality(
+        val frames: Int,
+        val baselineM: Float,
+        val medianDepthM: Float,
+        val parallaxRatio: Float,
+        val triangulationDeg: Float,
+        val rotationOnlyPct: Int,
+        /** False when no geometry was available, so the ratio means nothing. */
+        val measured: Boolean = true
+    ) {
+        // Only claim a capture is degenerate when scene depth was actually
+        // measurable; otherwise an empty seed cloud reads as "0 parallax" and
+        // produces a false warning on a perfectly good capture.
+        val isDegenerate: Boolean get() = measured && parallaxRatio < 0.15f
+    }
+
+    @Synchronized
+    fun computeQuality(): CaptureQuality {
+        val cams = capturedFrames.map {
+            floatArrayOf(it.transformMatrix[0][3], it.transformMatrix[1][3], it.transformMatrix[2][3])
+        }
+        if (cams.size < 2) return CaptureQuality(cams.size, 0f, 0f, 0f, 0f, 0)
+
+        // Widest separation between any two camera positions.
+        var baseline = 0f
+        for (i in cams.indices) for (j in i + 1 until cams.size) {
+            val dx = cams[i][0] - cams[j][0]
+            val dy = cams[i][1] - cams[j][1]
+            val dz = cams[i][2] - cams[j][2]
+            val dist = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+            if (dist > baseline) baseline = dist
+        }
+
+        // Median distance from the seed geometry to the nearest camera. Depth points
+        // are preferred, but fall back to ARCore feature points so the check still
+        // works when the depth map yields nothing.
+        val sample = if (depthVoxels.isNotEmpty()) depthVoxels.values.toList()
+        else accumulatedFeaturePoints.map { floatArrayOf(it.x, it.y, it.z) }
+        val depths = ArrayList<Float>(minOf(sample.size, 2000))
+        val stride = maxOf(1, sample.size / 2000)
+        var i = 0
+        while (i < sample.size) {
+            val v = sample[i]
+            var best = Float.MAX_VALUE
+            for (c in cams) {
+                val dx = v[0] - c[0]; val dy = v[1] - c[1]; val dz = v[2] - c[2]
+                val dd = dx * dx + dy * dy + dz * dz
+                if (dd < best) best = dd
+            }
+            if (best < Float.MAX_VALUE) depths.add(kotlin.math.sqrt(best))
+            i += stride
+        }
+        depths.sort()
+        val medianDepth = if (depths.isEmpty()) 0f else depths[depths.size / 2]
+
+        val ratio = if (medianDepth > 0.01f) baseline / medianDepth else 0f
+        val triDeg = (2.0 * kotlin.math.atan((ratio / 2.0)) * 180.0 / Math.PI).toFloat()
+
+        // Fraction of keyframes that added rotation but essentially no translation.
+        var rotOnly = 0
+        for (k in 0 until cams.size - 1) {
+            val dx = cams[k][0] - cams[k + 1][0]
+            val dy = cams[k][1] - cams[k + 1][1]
+            val dz = cams[k][2] - cams[k + 1][2]
+            if (kotlin.math.sqrt(dx * dx + dy * dy + dz * dz) < 0.02f) rotOnly++
+        }
+        val rotPct = if (cams.size > 1) (100 * rotOnly / (cams.size - 1)) else 0
+
+        return CaptureQuality(cams.size, baseline, medianDepth, ratio, triDeg, rotPct, medianDepth > 0.01f)
+    }
+
+    /** @param pts flat [x, y, z, confidence, r, g, b, logScale, ...] in world space. */
     @Synchronized
     fun addDepthPoints(pts: FloatArray) {
         var i = 0
-        while (i + 3 < pts.size) {
+        while (i + 7 < pts.size) {
             if (depthVoxels.size >= maxDepthPoints) return
             val x = pts[i]; val y = pts[i + 1]; val z = pts[i + 2]; val c = pts[i + 3]
             val vx = kotlin.math.floor(x / depthVoxelSize).toInt()
@@ -55,9 +136,11 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
                     ((vz.toLong() and 0x1FFFFF) shl 42)
             val existing = depthVoxels[key]
             if (existing == null || c > existing[3]) {
-                depthVoxels[key] = floatArrayOf(x, y, z, c)
+                depthVoxels[key] = floatArrayOf(
+                    x, y, z, c, pts[i + 4], pts[i + 5], pts[i + 6], pts[i + 7]
+                )
             }
-            i += 4
+            i += 8
         }
     }
 
@@ -233,6 +316,136 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
     }
 
     /**
+     * Least-squares point where the camera view rays converge -- i.e. what the user
+     * was orbiting. Solves A x = b with A = sum(I - d*d^T), b = sum((I - d*d^T) p).
+     * Returns null when the rays are too parallel to define a subject (e.g. the user
+     * walked down a corridor rather than around something).
+     */
+    private fun subjectCenter(cams: List<FloatArray>, fwds: List<FloatArray>): FloatArray? {
+        if (cams.size < 8) return null
+        val a = FloatArray(9)
+        val b = FloatArray(3)
+        for (i in cams.indices) {
+            val d = fwds[i]; val p = cams[i]
+            // M = I - d d^T
+            val m = floatArrayOf(
+                1f - d[0] * d[0], -d[0] * d[1], -d[0] * d[2],
+                -d[1] * d[0], 1f - d[1] * d[1], -d[1] * d[2],
+                -d[2] * d[0], -d[2] * d[1], 1f - d[2] * d[2]
+            )
+            for (k in 0..8) a[k] += m[k]
+            for (r in 0..2) b[r] += m[r * 3] * p[0] + m[r * 3 + 1] * p[1] + m[r * 3 + 2] * p[2]
+        }
+        val det = a[0] * (a[4] * a[8] - a[5] * a[7]) -
+                  a[1] * (a[3] * a[8] - a[5] * a[6]) +
+                  a[2] * (a[3] * a[7] - a[4] * a[6])
+        if (kotlin.math.abs(det) < 1e-4f) return null
+        val inv = floatArrayOf(
+            (a[4] * a[8] - a[5] * a[7]), (a[2] * a[7] - a[1] * a[8]), (a[1] * a[5] - a[2] * a[4]),
+            (a[5] * a[6] - a[3] * a[8]), (a[0] * a[8] - a[2] * a[6]), (a[2] * a[3] - a[0] * a[5]),
+            (a[3] * a[7] - a[4] * a[6]), (a[1] * a[6] - a[0] * a[7]), (a[0] * a[4] - a[1] * a[3])
+        )
+        val c = FloatArray(3)
+        for (r in 0..2) {
+            c[r] = (inv[r * 3] * b[0] + inv[r * 3 + 1] * b[1] + inv[r * 3 + 2] * b[2]) / det
+        }
+        return if (c.all { it.isFinite() }) c else null
+    }
+
+    /**
+     * Drop seed points that belong to the surroundings rather than the subject.
+     *
+     * The depth map reaches ~8 m, so scanning a small object indoors fills the entire
+     * point budget with walls, floor and furniture -- a plastic box produced a
+     * 15 x 9.5 x 15 m cloud, leaving the actual subject a tiny fraction of the seeds
+     * and of the optimizer's capacity. Keeping only what surrounds the point the
+     * cameras converge on spends the budget on the thing being scanned.
+     *
+     * Falls back to the unfiltered cloud whenever a subject cannot be identified
+     * confidently, so a room or corridor scan is never mangled.
+     */
+    @Synchronized
+    fun isolateSubject(radiusFactor: Float = 0.6f): Int {
+        if (depthVoxels.size < 2000 || capturedFrames.size < 8) return 0
+        val cams = capturedFrames.map {
+            floatArrayOf(it.transformMatrix[0][3], it.transformMatrix[1][3], it.transformMatrix[2][3])
+        }
+        val fwds = capturedFrames.map {
+            val m = it.transformMatrix
+            val f = floatArrayOf(-m[0][2], -m[1][2], -m[2][2])
+            val n = kotlin.math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2])
+            if (n > 1e-6f) floatArrayOf(f[0] / n, f[1] / n, f[2] / n) else f
+        }
+        val c = subjectCenter(cams, fwds) ?: run {
+            android.util.Log.i("DatasetExporter", "Subject isolation skipped: view rays do not converge")
+            return 0
+        }
+        val dists = cams.map {
+            kotlin.math.sqrt(
+                (it[0] - c[0]) * (it[0] - c[0]) +
+                (it[1] - c[1]) * (it[1] - c[1]) +
+                (it[2] - c[2]) * (it[2] - c[2])
+            )
+        }.sorted()
+        val subjectDist = dists[dists.size / 2]
+        if (!subjectDist.isFinite() || subjectDist < 0.05f) return 0
+
+        // Only isolate when the surroundings clearly dominate the subject. A room
+        // scanned from its perimeter also has converging rays, but there the cloud
+        // IS the subject -- cropping it would destroy the capture.
+        var mnX = Float.MAX_VALUE; var mxX = -Float.MAX_VALUE
+        var mnY = Float.MAX_VALUE; var mxY = -Float.MAX_VALUE
+        var mnZ = Float.MAX_VALUE; var mxZ = -Float.MAX_VALUE
+        for (v in depthVoxels.values) {
+            if (v[0] < mnX) mnX = v[0]; if (v[0] > mxX) mxX = v[0]
+            if (v[1] < mnY) mnY = v[1]; if (v[1] > mxY) mxY = v[1]
+            if (v[2] < mnZ) mnZ = v[2]; if (v[2] > mxZ) mxZ = v[2]
+        }
+        val diag = kotlin.math.sqrt(
+            (mxX - mnX) * (mxX - mnX) + (mxY - mnY) * (mxY - mnY) + (mxZ - mnZ) * (mxZ - mnZ)
+        )
+        if (diag < subjectDist * 5f) {
+            android.util.Log.i(
+                "DatasetExporter",
+                "Subject isolation skipped: cloud (%.1fm) is not much larger than subject distance (%.2fm)"
+                    .format(diag, subjectDist)
+            )
+            return 0
+        }
+
+        val keepR = subjectDist * radiusFactor
+
+        val before = depthVoxels.size
+        val it2 = depthVoxels.entries.iterator()
+        var kept = 0
+        val survivors = HashMap<Long, FloatArray>()
+        while (it2.hasNext()) {
+            val e = it2.next()
+            val v = e.value
+            val dx = v[0] - c[0]; val dy = v[1] - c[1]; val dz = v[2] - c[2]
+            if (dx * dx + dy * dy + dz * dz <= keepR * keepR) {
+                survivors[e.key] = v; kept++
+            }
+        }
+        // Too aggressive means we misidentified the subject -- keep everything.
+        if (kept < 1500 || kept < before / 50) {
+            android.util.Log.i(
+                "DatasetExporter",
+                "Subject isolation rejected: would keep only $kept of $before points"
+            )
+            return 0
+        }
+        depthVoxels.clear()
+        depthVoxels.putAll(survivors)
+        android.util.Log.i(
+            "DatasetExporter",
+            "Subject isolation: centre=(%.2f, %.2f, %.2f) dist=%.2fm radius=%.2fm -> kept %d of %d points"
+                .format(c[0], c[1], c[2], subjectDist, keepR, kept, before)
+        )
+        return kept
+    }
+
+    /**
      * Combine the dense depth cloud with the sparse ARCore feature points and
      * write the seed PLY the trainer initialises from.
      */
@@ -241,14 +454,21 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
         val total = depthVoxels.size + accumulatedFeaturePoints.size
         if (total == 0) return 0
         val xyz = FloatArray(total * 3)
+        val rgb = FloatArray(total * 3)
+        val logScale = FloatArray(total)
         var n = 0
         for (v in depthVoxels.values) {
             if (v[0].isFinite() && v[1].isFinite() && v[2].isFinite()) {
+                rgb[n] = v[4]; rgb[n + 1] = v[5]; rgb[n + 2] = v[6]
+                logScale[n / 3] = v[7]
                 xyz[n++] = v[0]; xyz[n++] = v[1]; xyz[n++] = v[2]
             }
         }
+        // Feature points carry no colour or size; fall back to neutral defaults.
         for (p in accumulatedFeaturePoints) {
             if (p.x.isFinite() && p.y.isFinite() && p.z.isFinite()) {
+                rgb[n] = 0.5f; rgb[n + 1] = 0.5f; rgb[n + 2] = 0.5f
+                logScale[n / 3] = -4.0f
                 xyz[n++] = p.x; xyz[n++] = p.y; xyz[n++] = p.z
             }
         }
@@ -256,7 +476,8 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
             "DatasetExporter",
             "Seed cloud: ${depthVoxels.size} depth points + ${accumulatedFeaturePoints.size} feature points"
         )
-        return com.splat.mobile3dgs.engine.GaussianInitializer.writePlyFromXyz(xyz, n / 3, plyFile)
+        return com.splat.mobile3dgs.engine.GaussianInitializer
+            .writeSeedPly(xyz, rgb, logScale, n / 3, plyFile)
     }
 
     private fun exportInitialPointCloud() {

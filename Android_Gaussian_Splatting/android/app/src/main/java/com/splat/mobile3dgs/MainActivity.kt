@@ -125,7 +125,9 @@ class MainActivity : AppCompatActivity() {
             "15,000 Steps (High quality - ~45 min, 1080p)"
         )
         val stepValues = intArrayOf(0, 300, 1000, 3000, 7000, 15000)
-        var selectedIndex = stepValues.indexOf(currentSteps).let { if (it >= 0) it else 0 }
+        // Default to a real training run, not the instant photometric placeholder --
+        // landing on index 0 made "Save" silently disable training.
+        var selectedIndex = stepValues.indexOf(currentSteps).let { if (it >= 0) it else 3 }
 
         AlertDialog.Builder(this)
             .setTitle("⚙️ 3DGS Quality & Iterations")
@@ -185,6 +187,42 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /** Re-run optimization on an existing capture at a chosen quality. */
+    private fun showRetrainDialog(model: RemoteModel, datasetDir: File) {
+        val labels = arrayOf(
+            "Fast  - 1500 steps @ 720p  (~4 min)",
+            "Normal - 3000 steps @ 720p  (~8 min)",
+            "High  - 7000 steps @ 720p  (~18 min)",
+            "Max   - 7000 steps @ 1080p (~40 min, hot)"
+        )
+        val steps = intArrayOf(1500, 3000, 7000, 7000)
+        val res = intArrayOf(720, 720, 720, 1080)
+        var choice = 1
+
+        AlertDialog.Builder(this)
+            .setTitle("Re-train " + model.name)
+            .setSingleChoiceItems(labels, choice) { _, w -> choice = w }
+            .setPositiveButton("Start") { d, _ ->
+                val out = File(filesDir, model.filename)
+                com.splat.mobile3dgs.engine.TrainingService.start(
+                    context = this,
+                    datasetPath = datasetDir.absolutePath,
+                    outputPath = out.absolutePath,
+                    steps = steps[choice],
+                    resolution = res[choice],
+                    modelName = model.name + " (" + steps[choice] + " steps)"
+                )
+                Toast.makeText(
+                    this,
+                    "Training started - progress is in the notification shade",
+                    Toast.LENGTH_LONG
+                ).show()
+                d.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun loadScansAndStatus() {
         progressBar.visibility = View.VISIBLE
         val profile = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getDeviceProfile(this)
@@ -192,16 +230,37 @@ class MainActivity : AppCompatActivity() {
         tvServerStatus.setTextColor(getColor(R.color.accent_green))
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val demoDest = File(filesDir, "photoreal_demo.splat")
-            if (!demoDest.exists()) {
-                try {
-                    assets.open("viewer/demo.splat").use { input ->
-                        FileOutputStream(demoDest).use { output ->
-                            input.copyTo(output)
+            // Automatically unpack default 3D models from assets on first run or if missing
+            val bundledModels = listOf(
+                "truck.splat" to "viewer/truck.splat",
+                "train.splat" to "viewer/train.splat",
+                "room.splat" to "viewer/room.splat",
+                "photoreal_demo.splat" to "viewer/demo.splat"
+            )
+            for ((filename, assetPath) in bundledModels) {
+                val dest = File(filesDir, filename)
+                if (!dest.exists() || dest.length() == 0L) {
+                    try {
+                        assets.open(assetPath).use { input ->
+                            FileOutputStream(dest).use { output ->
+                                input.copyTo(output)
+                            }
                         }
+                    } catch (e: Exception) {
+                        // Optional asset
                     }
-                } catch (e: Exception) {
-                    // Optional asset
+                }
+            }
+
+            // Also import any .splat files placed in external app storage (e.g. via USB MTP)
+            getExternalFilesDir(null)?.let { extDir ->
+                extDir.listFiles { f -> f.isFile && f.name.endsWith(".splat") && f.length() > 0 }?.forEach { extFile ->
+                    val target = File(filesDir, extFile.name)
+                    if (!target.exists() || target.length() != extFile.length()) {
+                        try {
+                            extFile.copyTo(target, overwrite = true)
+                        } catch (_: Exception) {}
+                    }
                 }
             }
 
@@ -231,7 +290,17 @@ class MainActivity : AppCompatActivity() {
     private fun openModel(model: RemoteModel) {
         val localFile = File(filesDir, model.filename)
         if (localFile.exists() && localFile.length() > 0) {
-            val options = arrayOf(
+            // A capture keeps its images, poses and seed cloud on disk, so it can be
+            // re-optimized with different settings without walking around the subject
+            // again -- a failed or over-long run no longer costs a rescan.
+            val datasetDir = File(getExternalFilesDir(null), model.name)
+            val canRetrain = File(datasetDir, "transforms.json").exists()
+
+            val options = if (canRetrain) arrayOf(
+                "🎮 Open 3D Viewport (Orbit, Measure & Crop)",
+                "👓 Place Model in Real World (AR Placement)",
+                "⚡ Re-train this capture (no rescan)"
+            ) else arrayOf(
                 "🎮 Open 3D Viewport (Orbit, Measure & Crop)",
                 "👓 Place Model in Real World (AR Placement)"
             )
@@ -253,6 +322,7 @@ class MainActivity : AppCompatActivity() {
                             }
                             startActivity(intent)
                         }
+                        2 -> showRetrainDialog(model, datasetDir)
                     }
                 }
                 .setNegativeButton("Cancel", null)

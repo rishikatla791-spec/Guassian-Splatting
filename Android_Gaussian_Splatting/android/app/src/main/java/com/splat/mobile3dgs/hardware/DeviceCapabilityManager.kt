@@ -10,7 +10,7 @@ import android.os.PowerManager
 import android.util.Log
 
 enum class HardwareTier(val tierName: String, val description: String) {
-    TIER_1_FLAGSHIP("Tier 1 (Flagship)", "Snapdragon 8 Gen 2 / 12GB+ RAM: Full On-Device 3DGS (7k steps, 1080p)"),
+    TIER_1_FLAGSHIP("Tier 1 (Flagship)", "Snapdragon 8 Gen 2 / 12GB+ RAM: Full On-Device 3DGS (3k steps, 720p)"),
     TIER_2_BALANCED("Tier 2 (Balanced)", "8GB - 11GB RAM: Optimized On-Device 3DGS (3.5k steps, 720p)"),
     TIER_3_STANDALONE("Tier 3 (Standalone)", "<8GB RAM: Standalone Direct Photometric Splatting & 360p Fast Refine")
 }
@@ -53,8 +53,12 @@ object DeviceCapabilityManager {
         return when (tier) {
             HardwareTier.TIER_1_FLAGSHIP -> TrainingProfile(
                 tier = tier,
-                totalSteps = 7000,
-                maxResolution = 1080,
+                // 1080p costs 2.25x the pixels of 720p per step and was the main
+                // reason runs took 30+ minutes and thermally throttled. 720p with
+                // good parallax beats 1080p with poor parallax; 7000 steps and
+                // 1080p remain available as an explicit choice in the dialog.
+                totalSteps = 3000,
+                maxResolution = 720,
                 maxGaussians = 1000000,
                 refineEvery = 100,
                 exportEvery = 1000,
@@ -80,8 +84,10 @@ object DeviceCapabilityManager {
                 // Budget SoCs (e.g. Snapdragon 4/6 series, Mali-G52) need lightweight
                 // parameters to ensure training completes in under ~45s without thermal
                 // throttling or exceeding available user-space RAM.
-                totalSteps = 300,
-                maxResolution = 360,
+                // 300 steps at 360p cannot reconstruct anything -- it just produced a
+                // few hundred splats. Budget SoCs are slow, not incapable.
+                totalSteps = 1500,
+                maxResolution = 540,
                 maxGaussians = 80000,
                 refineEvery = 100,
                 exportEvery = 300,
