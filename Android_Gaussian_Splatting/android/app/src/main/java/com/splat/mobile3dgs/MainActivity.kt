@@ -76,6 +76,7 @@ class MainActivity : AppCompatActivity() {
         tvModelCount = findViewById(R.id.tv_model_count)
         tvDeviceStatus = findViewById(R.id.tv_device_status)
         cardTraining = findViewById(R.id.card_training)
+        findViewById<View>(R.id.btn_cancel_training).setOnClickListener { confirmStopTraining() }
         tvTrainingPct = findViewById(R.id.tv_training_pct)
         tvTrainingState = findViewById(R.id.tv_training_state)
         progressTraining = findViewById(R.id.progress_training)
@@ -303,6 +304,51 @@ class MainActivity : AppCompatActivity() {
     }
 
     // -------------------------------------------------------------- training
+
+    /**
+     * Stop a run in flight.
+     *
+     * brush's C ABI has no abort: `train_and_save` owns the thread until the run
+     * finishes, so the most a cancel can do in-process is park the training
+     * thread -- the GPU goes idle and the device stops heating, but the run's
+     * memory stays held for the life of the process. Rather than leave the app in
+     * that poisoned state (where the next training attempt would fail until the
+     * user manually force-stopped it), park the engine and then restart the
+     * process cleanly. Checkpoints already written survive on disk.
+     */
+    private fun confirmStopTraining() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.training_cancel_title)
+            .setMessage(R.string.training_cancel_body)
+            .setPositiveButton(R.string.training_cancel_confirm) { _, _ -> stopTrainingAndRestart() }
+            .setNegativeButton(R.string.training_cancel_keep, null)
+            .show()
+    }
+
+    private fun stopTrainingAndRestart() {
+        // Parks the training thread immediately so the GPU stops before the
+        // process goes down, and lets the service tear its notification down.
+        try {
+            TrainingService.cancel(this)
+        } catch (t: Throwable) {
+            android.util.Log.w("MainActivity", "Cancel dispatch failed: ${t.message}")
+        }
+        Toast.makeText(this, R.string.training_cancel_title, Toast.LENGTH_SHORT).show()
+
+        // Queue a relaunch, then end the process: that is the only thing that
+        // actually reclaims what the engine is holding.
+        val restart = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        val pending = android.app.PendingIntent.getActivity(
+            this, 0, restart,
+            android.app.PendingIntent.FLAG_CANCEL_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        val am = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        am.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 400, pending)
+
+        finishAffinity()
+        android.os.Process.killProcess(android.os.Process.myPid())
+    }
 
     private fun showTrainingProgress(step: Int, pct: Int) {
         if (cardTraining.visibility != View.VISIBLE) {

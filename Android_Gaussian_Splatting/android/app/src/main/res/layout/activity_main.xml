@@ -173,6 +173,14 @@
                         android:layout_marginTop="@dimen/space_md"
                         android:text="@string/training_hint"
                         android:textAppearance="@style/TextAppearance.Clay.Caption" />
+
+                    <Button
+                        android:id="@+id/btn_cancel_training"
+                        style="@style/Widget.Clay.Button.Ghost"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_md"
+                        android:text="@string/training_cancel" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

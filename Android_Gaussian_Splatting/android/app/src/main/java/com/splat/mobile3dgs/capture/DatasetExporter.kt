@@ -214,6 +214,20 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
     @Synchronized
     fun depthPointCount(): Int = depthVoxels.size
 
+    /**
+     * The dense depth seed cloud as feature points, for the photometric fallback.
+     *
+     * The fallback was being fed only [accumulatedFeaturePoints] -- a few hundred
+     * sparse ARCore features -- while tens of thousands of dense, coloured depth
+     * points sat unused in this same object. That is why a failed training run
+     * showed the user ~150 scattered dots instead of a recognisable preview.
+     */
+    @Synchronized
+    fun depthPointsAsFeatures(): List<FeaturePoint3D> {
+        var id = accumulatedFeaturePoints.size
+        return depthVoxels.values.map { v -> FeaturePoint3D(id++, v[0], v[1], v[2], v[3]) }
+    }
+
     /** Guards against a second correction pass re-applying deltas. */
     private var anchorCorrectionsApplied = false
 

@@ -2,8 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- No INTERNET / ACCESS_NETWORK_STATE: capture, training and viewing all run
+         on this device, and nothing in the app opens a socket. Manifest-merger
+         blame confirms both came from here rather than from the ARCore AAR, so
+         dropping them costs nothing and keeps the permission list honest. -->
 
     <!-- On-device training runs for many minutes; it must survive the screen
          locking or the user switching apps. -->

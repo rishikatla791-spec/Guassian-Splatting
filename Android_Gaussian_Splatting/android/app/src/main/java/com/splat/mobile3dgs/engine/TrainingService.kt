@@ -478,6 +478,25 @@ class TrainingService : Service() {
             .setOnlyAlertOnce(true)
             .setProgress(100, pct, indeterminate)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            // Training is a long background job, so it has to be stoppable from
+            // the shade -- otherwise the only way out is force-stopping the app.
+            .addAction(
+                0,
+                "Stop",
+                PendingIntent.getService(
+                    this, 1,
+                    Intent(this, TrainingService::class.java).setAction(ACTION_CANCEL),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this, 2,
+                    Intent(this, com.splat.mobile3dgs.MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
             .build()
     }
 

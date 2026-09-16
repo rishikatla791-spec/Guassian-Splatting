@@ -199,6 +199,20 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
          */
         private const val ISOLATE_SUBJECT = false
 
+        /**
+         * Below this the ARCore depth API stops returning anything: it reported
+         * zero for all 14400 samples on a scan taken at 0.25 m, leaving the seed
+         * cloud with a tenth of its usual geometry. Depth, not framing, sets the
+         * lower bound on how close a scan can be.
+         */
+        // Measured: 0.25 m returned zero for all 14400 depth samples, while 0.37 m
+        // kept 14270 of 14400. The cliff is below ~0.3 m, so warning at 0.45 m
+        // nagged about scans that were working fine.
+        private const val TOO_CLOSE_M = 0.30f
+
+        /** Past this the subject is too small in frame to resolve detail. */
+        private const val TOO_FAR_M = 3.0f
+
         private const val ROTATION_ONLY_STEP_M = 0.02f
 
         /** Frames kept in the rolling orbit-quality window. */
@@ -785,9 +799,18 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             while (recentMoved.size > ORBIT_WINDOW) recentMoved.removeFirst()
             if (recentMoved.size >= 8) {
                 val still = recentMoved.count { !it }
-                orbitHint = if (still.toFloat() / recentMoved.size > ORBIT_WARN_FRACTION) {
-                    "Walk AROUND the object — turning in place adds no depth"
-                } else null
+                val d = subjectDistEstimate
+                // Distance first: too close silently kills depth seeding, which
+                // costs far more than a rotation-heavy path.
+                orbitHint = when {
+                    d > 0.05f && d < TOO_CLOSE_M ->
+                        "Too close (${(d * 100).toInt()}cm) — step back to about 60cm"
+                    d > TOO_FAR_M ->
+                        "Too far (${"%.1f".format(d)}m) — move closer for detail"
+                    still.toFloat() / recentMoved.size > ORBIT_WARN_FRACTION ->
+                        "Walk AROUND the object — turning in place adds no depth"
+                    else -> null
+                }
             }
         }
 
@@ -888,6 +911,11 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private fun stopRecordingSession() {
         isRecording = false
         Log.i(TAG, "Frame quality: ${frameQualityFilter.summary()}")
+        // Logged once per scan: the first-frame-only diagnostic hid that depth was
+        // failing for the WHOLE run, not just while ARCore warmed up.
+        Log.i(TAG, "Depth yield (last frame): ${DepthPointExtractor.lastStats()} " +
+                "subjectDist=${"%.2f".format(subjectDistEstimate)}m " +
+                "seedPoints=${datasetExporter.depthPointCount()}")
         btnRecord.isEnabled = false
         btnRecord.text = "Processing..."
         progressBar.visibility = View.VISIBLE
@@ -983,7 +1011,10 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
                 // Generate standalone Direct Photometric Splat model (zero GPU/Vulkan dependency, runs in ~1.5s on CPU)
                 val directSplatCount = com.splat.mobile3dgs.engine.GaussianInitializer.generatePhotometricSplatModel(
-                    points = datasetExporter.accumulatedFeaturePoints,
+                    // Sparse features PLUS the dense depth cloud. Features alone gave
+                    // ~150 splats from a 60k-point scan; the preview is what the user
+                    // sees if training fails, so it must actually resemble the scene.
+                    points = datasetExporter.accumulatedFeaturePoints + datasetExporter.depthPointsAsFeatures(),
                     datasetDir = datasetDir,
                     frames = datasetExporter.capturedFrames,
                     fx = fx, fy = fy, cx = cx, cy = cy,
