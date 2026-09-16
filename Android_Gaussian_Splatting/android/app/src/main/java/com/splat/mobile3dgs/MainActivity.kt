@@ -347,7 +347,9 @@ class MainActivity : AppCompatActivity() {
 
         class VH(v: View) : RecyclerView.ViewHolder(v) {
             val card: View = v.findViewById(R.id.card_model)
-            val thumb: ImageView = v.findViewById(R.id.thumb_model)
+            // thumb_model is the claymorphism tile (a FrameLayout holding an icon),
+            // not an ImageView -- the clay_thumb_* drawables are its BACKGROUND.
+            val thumb: View = v.findViewById(R.id.thumb_model)
             val name: TextView = v.findViewById(R.id.tv_model_name)
             val gaussians: TextView = v.findViewById(R.id.tv_model_gaussians)
             val size: TextView = v.findViewById(R.id.tv_model_size)
@@ -369,7 +371,7 @@ class MainActivity : AppCompatActivity() {
             )
             holder.size.text = ctx.getString(R.string.model_meta_size, "%.1f".format(m.sizeMb))
             holder.date.text = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(m.modifiedAt))
-            holder.thumb.setImageResource(thumbs[position % thumbs.size])
+            holder.thumb.setBackgroundResource(thumbs[position % thumbs.size])
             holder.card.setOnClickListener { onClick(m) }
 
             // Stagger cards in on first appearance only, so scrolling stays still.
