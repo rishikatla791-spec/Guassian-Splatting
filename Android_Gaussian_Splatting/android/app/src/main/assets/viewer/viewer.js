@@ -1195,7 +1195,14 @@ class GaussianSplatViewer {
     }
 
     /**
-     * Dynamic LOD. `autoBudget` tracks what this GPU can sustain at ~60 fps;
+     * Dynamic LOD. `autoBudget` tracks what this GPU can sustain while the
+     * camera is SETTLED, targeting ~35 fps rather than 60.
+     *
+     * Inspecting a reconstruction is not a game: holding 60 fps by drawing 19%
+     * of the Gaussians makes a sharp model look like fog, which is exactly the
+     * blur users report. When the camera is still, detail is worth far more than
+     * frame rate, so the budget is allowed to grow until frames cost ~28 ms.
+     * Motion still drops to a reduced budget, where the blur is hidden anyway.
      * `budget` eases toward a reduced target while the camera moves and back to
      * full density once it settles.
      */
@@ -1214,9 +1221,9 @@ class GaussianSplatViewer {
                 this.tuneAccum = 0; this.tuneFrames = 0; this.lastTune = now;
                 // Frames pinned to the refresh interval mean spare GPU time, so
                 // the budget can grow back; anything slower means back off.
-                if (avg > 23.5) this.autoBudget *= 0.80;        // below ~42 fps
-                else if (avg > 18.5) this.autoBudget *= 0.93;
-                else if (avg < 17.6 && this.budget > this.autoBudget * 0.9) this.autoBudget *= 1.10;
+                if (avg > 40) this.autoBudget *= 0.85;          // below ~25 fps
+                else if (avg > 28) this.autoBudget *= 0.95;        // below ~36 fps
+                else if (avg < 24 && this.budget > this.autoBudget * 0.9) this.autoBudget *= 1.15;
                 this.autoBudget = clamp(this.autoBudget, 40000, this.caps.maxSplats);
             }
         }

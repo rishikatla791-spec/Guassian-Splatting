@@ -23,11 +23,13 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.ar.core.Anchor
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.CameraConfig
 import com.google.ar.core.CameraConfigFilter
 import com.google.ar.core.Config
 import com.google.ar.core.Frame
+import com.google.ar.core.Pose
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
@@ -46,8 +48,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -106,6 +110,29 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     /** OpenCV [k1, k2, p1, p2] read once from Camera2, or null on a device that reports none. */
     @Volatile private var lensDistortion: FloatArray? = null
 
+    /**
+     * ARCore keeps re-refining [Anchor]s as it learns the space, while a raw VIO
+     * pose is frozen the moment it is read. Each keyframe is therefore bound to a
+     * nearby anchor and recomposed against that anchor's corrected pose at export
+     * time, which absorbs the drift that accumulates over a long walk.
+     */
+    private val sceneAnchors = mutableListOf<Anchor>()
+    private var currentAnchor: Anchor? = null
+    private var currentAnchorPos: FloatArray? = null
+    private var keyframesSinceAnchor = 0
+    @Volatile private var anchorsAvailable = false
+
+    /**
+     * Rolling record of whether each recent keyframe added real translation.
+     *
+     * Turning in place produces NO parallax, so those frames carry no depth
+     * information at all -- a scan that is half rotation reconstructs as clouds.
+     * This was previously only measured after the fact, which is too late for the
+     * user to do anything about it.
+     */
+    private val recentMoved = ArrayDeque<Boolean>()
+    @Volatile private var orbitHint: String? = null
+
     /** Last detailed engine result, so a failure dialog can name the actual cause. */
     @Volatile private var lastTrainingResult: com.splat.mobile3dgs.engine.TrainingResult? = null
     @Volatile private var keptFrameCount = 0
@@ -156,6 +183,38 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         /** Minimum gap between on-screen capture-quality hints, so they stay readable. */
         private const val QUALITY_HINT_INTERVAL_MS = 1500L
+
+        /** Drop a fresh anchor at least this often along the walk. */
+        /** Consecutive keyframes closer than this added rotation but no baseline. */
+        /**
+         * Share of TOTAL RAM the capture may size itself against. 0.3 of a 12 GB
+         * phone is ~3.6 GB, within the 5-6 GB the device owner authorised, and well
+         * clear of what the engine actually needs (~750 MB RSS measured).
+         */
+        private const val MEMORY_BUDGET_FRACTION = 0.30f
+
+        /**
+         * Crop the seed cloud to the subject? Off: it makes the object sharper but
+         * leaves the surroundings with no seed geometry at all.
+         */
+        private const val ISOLATE_SUBJECT = false
+
+        private const val ROTATION_ONLY_STEP_M = 0.02f
+
+        /** Frames kept in the rolling orbit-quality window. */
+        private const val ORBIT_WINDOW = 20
+
+        /** Warn once this share of the recent window is rotation-only. */
+        private const val ORBIT_WARN_FRACTION = 0.40f
+
+        private const val ANCHOR_SPACING_M = 0.5f
+        private const val ANCHOR_KEYFRAME_INTERVAL = 15
+
+        /** ARCore tracks anchors at a real cost; a scan never needs more. */
+        private const val MAX_ANCHORS = 32
+
+        /** Correction runs on the GL thread; never block export on it for long. */
+        private const val ANCHOR_RESOLVE_TIMEOUT_MS = 2500L
 
         private const val SCANNING_STATUS = "Scanning — orbit slowly around the object..."
 
@@ -322,6 +381,11 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             }
         }
         glSurfaceView.onResume()
+        // releaseCaptureResources() drops the surface to RENDERMODE_WHEN_DIRTY, and
+        // nothing ever marks it dirty -- so without restoring this, onDrawFrame
+        // never runs again and the preview stays black with no keyframes. Reached
+        // on every permission dialog, since that pauses the Activity.
+        glSurfaceView.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
     }
 
     /**
@@ -700,7 +764,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     depthLogged = true
                     Log.i(TAG, "Depth seeding active: ${depthImage.width}x${depthImage.height} " +
                             "raw=$usedRawDepth conf=${confImage != null} -> " +
-                            "${(depthPts?.size ?: 0) / 4} points/frame [${DepthPointExtractor.lastStats()}]")
+                            "${(depthPts?.size ?: 0) / 8} points/frame [${DepthPointExtractor.lastStats()}]")
                 }
             } else if (!depthLogged) {
                 depthLogged = true
@@ -712,6 +776,19 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             depthImage?.close()
             confImage?.close()
             image.close()
+        }
+
+        // Did this keyframe add real baseline, or only turn the phone? Measured the
+        // same way computeQuality() scores rotationOnly, but live.
+        lastKeptPos?.let { prev ->
+            recentMoved.addLast(distance(pos, prev) >= ROTATION_ONLY_STEP_M)
+            while (recentMoved.size > ORBIT_WINDOW) recentMoved.removeFirst()
+            if (recentMoved.size >= 8) {
+                val still = recentMoved.count { !it }
+                orbitHint = if (still.toFloat() / recentMoved.size > ORBIT_WARN_FRACTION) {
+                    "Walk AROUND the object — turning in place adds no depth"
+                } else null
+            }
         }
 
         val timestamp = frame.timestamp
@@ -727,16 +804,23 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         val ptsForSave = pointsCopy
         val depthForSave = depthPts
+        // Bind to a nearby anchor on the GL thread (anchors belong to the session)
+        // so the pose can inherit ARCore's later drift corrections at export time.
+        val anchorRef = anchorRefFor(pose)
+        val frameIndex = datasetExporter.capturedFrames.size
+        val blurScore = quality.blurScore
         saveExecutor.execute {
             try {
-                depthForSave?.let { datasetExporter.addDepthPoints(it) }
+                depthForSave?.let { datasetExporter.addDepthPoints(it, frameIndex) }
                 datasetExporter.saveCapturedFrameJpeg(
                     jpegBytes = jpeg,
                     poseMatrix = poseMatrix,
                     timestampNs = timestamp,
-                    sharpnessScore = 0f,
+                    sharpnessScore = blurScore,
                     meanLuminance = meanLum,
-                    pointsXyzc = ptsForSave
+                    pointsXyzc = ptsForSave,
+                    anchorRef = anchorRef,
+                    capturePose = pose
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save frame: ${e.message}")
@@ -767,6 +851,8 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         pMinZ = Float.MAX_VALUE; pMaxZ = -Float.MAX_VALUE
         pendingSaves.set(0)
         frameQualityFilter.reset()
+        recentMoved.clear()
+        orbitHint = null
         lastQualityHintMs = 0L
         qualityHintShowing = false
 
@@ -776,11 +862,22 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         // be limited to a handful of frames just because of its model number. An
         // explicit quality choice raises the ceiling further.
         val availGb = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getAvailableRamGb(this)
+        val totalGb = com.splat.mobile3dgs.hardware.DeviceCapabilityManager.getTotalRamGb(this)
         val prefsK = getSharedPreferences("Mobile3DGS_Prefs", Context.MODE_PRIVATE)
         val userChoseQuality = prefsK.contains("PREF_TRAINING_STEPS")
-        maxKeyframes = (availGb * 60f).toInt().coerceIn(60, if (userChoseQuality) 250 else 150)
-        Log.i(TAG, "Capture start: tier=${profile.tier.tierName} availRam=${"%.1f".format(availGb)}GB " +
-                "maxKeyframes=$maxKeyframes userChoseQuality=$userChoseQuality")
+
+        // availMem reports what is free RIGHT NOW, which on a healthy phone is small
+        // because Android deliberately spends RAM on page cache -- it reclaims that
+        // on demand. Sizing purely on it punished a 12 GB device for being well used
+        // (measured: 1.9 GB free of 11 GB -> only 113 keyframes). Frame coverage is
+        // the main thing constraining reconstruction quality, so budget against a
+        // share of TOTAL memory and treat availMem as a floor, not a ceiling.
+        val budgetGb = maxOf(availGb, totalGb * MEMORY_BUDGET_FRACTION)
+        maxKeyframes = (budgetGb * 60f).toInt().coerceIn(60, if (userChoseQuality) 250 else 150)
+        Log.i(TAG, "Capture start: tier=${profile.tier.tierName} " +
+                "ram=${"%.1f".format(availGb)}GB free of ${"%.1f".format(totalGb)}GB " +
+                "budget=${"%.1f".format(budgetGb)}GB maxKeyframes=$maxKeyframes " +
+                "userChoseQuality=$userChoseQuality")
 
         isRecording = true
 
@@ -814,8 +911,19 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     return@launch
                 }
 
+                // Inherit ARCore's post-hoc drift corrections BEFORE anything reads
+                // the poses -- subject isolation, the quality metrics and the export
+                // all consume transformMatrix.
+                val anchorCorrected = resolveAnchorPoses()
+                Log.i(TAG, "Anchor pose correction applied to $anchorCorrected frames")
+
                 // Spend the seed budget on the subject, not the room behind it.
-                datasetExporter.isolateSubject()
+                // Subject isolation deliberately DELETES every seed outside a
+                // sphere around the object, which sharpens the object at the cost
+                // of starving the surroundings. The goal here is a scene that is
+                // clear everywhere, and the seed budget is now large enough to
+                // cover both, so it is left off rather than cropping the scene.
+                if (ISOLATE_SUBJECT) datasetExporter.isolateSubject(subjectDistEstimate)
 
                 val quality = datasetExporter.computeQuality()
                 Log.i(TAG, "Capture quality: frames=${quality.frames} baseline=" +
@@ -1028,7 +1136,13 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 val dx = pMaxX - pMinX; val dy = pMaxY - pMinY; val dz = pMaxZ - pMinZ
                 (sqrt(dx * dx + dy * dy + dz * dz) * 100f).toInt()
             } else 0
-            runOnUiThread { tvFrameCount.text = "$keptFrameCount Frames | moved ${spanCm}cm" }
+            val hint = orbitHint
+            runOnUiThread {
+                tvFrameCount.text = "$keptFrameCount Frames | moved ${spanCm}cm"
+                // Only overwrite the status line with the orbit warning; the blur
+                // hint owns it briefly and clears itself.
+                if (hint != null) tvStatus.text = hint
+            }
         } else if (!tracking) {
             runOnUiThread { tvStatus.text = "Move phone slowly to start tracking..." }
         }
@@ -1037,6 +1151,96 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     // -------------------------------------------------------------------------
     // Math helpers
     // -------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    // Anchor-relative poses
+    // -------------------------------------------------------------------------
+
+    /**
+     * This keyframe's pose relative to a nearby anchor, creating a new anchor every
+     * [ANCHOR_SPACING_M] metres or [ANCHOR_KEYFRAME_INTERVAL] keyframes, whichever
+     * comes first.
+     *
+     * Returns null whenever anchors cannot be used, in which case the caller keeps
+     * the raw absolute pose and nothing downstream changes.
+     */
+    private fun anchorRefFor(pose: Pose): AnchorPoseRef? {
+        val s = session ?: return null
+        return try {
+            var anchor = currentAnchor
+            val anchorPos = currentAnchorPos
+            val stale = anchor == null ||
+                anchor.trackingState != TrackingState.TRACKING ||
+                keyframesSinceAnchor >= ANCHOR_KEYFRAME_INTERVAL ||
+                (anchorPos != null &&
+                    distance(floatArrayOf(pose.tx(), pose.ty(), pose.tz()), anchorPos) > ANCHOR_SPACING_M)
+
+            if (stale && sceneAnchors.size < MAX_ANCHORS) {
+                val fresh = s.createAnchor(pose)
+                sceneAnchors.add(fresh)
+                currentAnchor = fresh
+                currentAnchorPos = floatArrayOf(pose.tx(), pose.ty(), pose.tz())
+                keyframesSinceAnchor = 0
+                anchorsAvailable = true
+                anchor = fresh
+                Log.i(TAG, "Anchor ${sceneAnchors.size} created at keyframe $keptFrameCount")
+            }
+
+            val anc = anchor ?: return null
+            if (anc.trackingState != TrackingState.TRACKING) return null
+            keyframesSinceAnchor++
+            AnchorPoseRef(anc, anc.pose.inverse().compose(pose))
+        } catch (t: Throwable) {
+            // Anchors are an optimisation, never a requirement.
+            if (anchorsAvailable) Log.w(TAG, "Anchor unavailable, using absolute pose: ${t.message}")
+            null
+        }
+    }
+
+    /**
+     * Recompose every anchor-backed pose against its anchor's CURRENT pose.
+     *
+     * Anchors belong to the ARCore session, so this is dispatched onto the GL
+     * thread -- the only thread that touches the session -- and waited on with a
+     * timeout; on timeout the dataset simply keeps its absolute poses.
+     */
+    private fun resolveAnchorPoses(): Int {
+        if (!anchorsAvailable) {
+            Log.i(TAG, "No anchors were created; exporting absolute VIO poses")
+            return 0
+        }
+        val corrected = AtomicInteger(0)
+        val latch = CountDownLatch(1)
+        try {
+            glSurfaceView.queueEvent {
+                try {
+                    corrected.set(datasetExporter.applyAnchorCorrections())
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Anchor correction failed: ${t.message}")
+                } finally {
+                    detachAnchors()
+                    latch.countDown()
+                }
+            }
+            if (!latch.await(ANCHOR_RESOLVE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "Anchor correction timed out; exporting absolute VIO poses")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not schedule anchor correction: ${t.message}")
+        }
+        return corrected.get()
+    }
+
+    /** Release the anchors back to ARCore once their corrections have been read. */
+    private fun detachAnchors() {
+        for (a in sceneAnchors) {
+            try { a.detach() } catch (t: Throwable) { /* already gone */ }
+        }
+        sceneAnchors.clear()
+        currentAnchor = null
+        currentAnchorPos = null
+        anchorsAvailable = false
+    }
 
     private fun distance(a: FloatArray, b: FloatArray): Float {
         val dx = a[0] - b[0]; val dy = a[1] - b[1]; val dz = a[2] - b[2]

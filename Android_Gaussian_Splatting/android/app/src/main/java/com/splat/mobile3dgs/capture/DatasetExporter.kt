@@ -2,20 +2,46 @@ package com.splat.mobile3dgs.capture
 
 import android.content.Context
 import android.graphics.Bitmap
+import com.google.ar.core.Anchor
 import com.google.ar.core.PointCloud
+import com.google.ar.core.Pose
+import com.google.ar.core.TrackingState
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.FloatBuffer
 
+/**
+ * Binds a keyframe to a nearby ARCore [Anchor] plus the pose it had RELATIVE to
+ * that anchor at capture time.
+ *
+ * A raw VIO pose is frozen the instant it is read, but ARCore keeps refining its
+ * map afterwards. Storing the relative pose lets the absolute one be recomposed
+ * at export time against the anchor's corrected pose, so the dataset inherits
+ * every correction ARCore made after the shot was taken.
+ */
+class AnchorPoseRef(
+    val anchor: Anchor,
+    val relativePose: Pose
+)
+
 data class FrameMetaData(
     val frameId: Int,
     val filePath: String,
     val timestampNs: Long,
-    val transformMatrix: Array<FloatArray>, // 4x4 homogenous matrix
+    /**
+     * 4x4 camera-to-world matrix. Rewritten in place by
+     * [DatasetExporter.applyAnchorCorrections] with the drift-corrected pose,
+     * hence `var`.
+     */
+    var transformMatrix: Array<FloatArray>,
     val sharpnessScore: Float,
-    val meanLuminance: Float
+    val meanLuminance: Float,
+    /** Anchor binding, or null when anchors were unavailable for this frame. */
+    val anchorRef: AnchorPoseRef? = null,
+    /** The raw ARCore pose as recorded, needed to compute the correction delta. */
+    val capturePose: Pose? = null
 )
 
 data class FeaturePoint3D(
@@ -37,8 +63,9 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
     // voxel grid as points arrive so memory stays bounded by scene volume rather
     // than by (frames x depth pixels).
     private val depthVoxels = HashMap<Long, FloatArray>()
-    private val depthVoxelSize = 0.01f
-    private val maxDepthPoints = 250_000
+    // Grows coarser rather than truncating -- see addDepthPoints.
+    private var depthVoxelSize = 0.01f
+    private val maxDepthPoints = 900_000
 
     /**
      * How usable this capture actually is for 3D reconstruction.
@@ -123,10 +150,15 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
 
     /** @param pts flat [x, y, z, confidence, r, g, b, logScale, ...] in world space. */
     @Synchronized
-    fun addDepthPoints(pts: FloatArray) {
+    fun addDepthPoints(pts: FloatArray, frameIndex: Int = -1) {
         var i = 0
         while (i + 7 < pts.size) {
-            if (depthVoxels.size >= maxDepthPoints) return
+            // Previously this returned outright once the budget filled, so every
+            // later frame contributed NOTHING and the seed cloud described only
+            // whatever the scan happened to start on -- measured: the cap was hit
+            // exactly, on a 101-frame scan. Coarsen the grid instead, which keeps
+            // coverage global and bounded rather than first-come-first-served.
+            if (depthVoxels.size >= maxDepthPoints) coarsenVoxelGrid()
             val x = pts[i]; val y = pts[i + 1]; val z = pts[i + 2]; val c = pts[i + 3]
             val vx = kotlin.math.floor(x / depthVoxelSize).toInt()
             val vy = kotlin.math.floor(y / depthVoxelSize).toInt()
@@ -136,16 +168,147 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
                     ((vz.toLong() and 0x1FFFFF) shl 42)
             val existing = depthVoxels[key]
             if (existing == null || c > existing[3]) {
+                // [8] is the source keyframe, so anchor drift corrections can move
+                // each point by exactly the delta its own camera received.
                 depthVoxels[key] = floatArrayOf(
-                    x, y, z, c, pts[i + 4], pts[i + 5], pts[i + 6], pts[i + 7]
+                    x, y, z, c, pts[i + 4], pts[i + 5], pts[i + 6], pts[i + 7],
+                    frameIndex.toFloat()
                 )
             }
             i += 8
         }
     }
 
+    /**
+     * Halve the resolution of the seed grid, merging occupied voxels.
+     *
+     * Surfaces are effectively 2D, so doubling the voxel edge drops the count by
+     * roughly 4x -- enough headroom to keep ingesting the rest of the scan. The
+     * cloud stays a uniform sample of everything seen, just slightly coarser,
+     * which is far better for reconstruction than a dense sample of the first
+     * few frames and nothing after.
+     */
+    private fun coarsenVoxelGrid() {
+        val before = depthVoxels.size
+        depthVoxelSize *= 2f
+        val merged = HashMap<Long, FloatArray>(before / 2)
+        for (v in depthVoxels.values) {
+            val vx = kotlin.math.floor(v[0] / depthVoxelSize).toInt()
+            val vy = kotlin.math.floor(v[1] / depthVoxelSize).toInt()
+            val vz = kotlin.math.floor(v[2] / depthVoxelSize).toInt()
+            val key = (vx.toLong() and 0x1FFFFF) or
+                    ((vy.toLong() and 0x1FFFFF) shl 21) or
+                    ((vz.toLong() and 0x1FFFFF) shl 42)
+            val existing = merged[key]
+            if (existing == null || v[3] > existing[3]) merged[key] = v
+        }
+        depthVoxels.clear()
+        depthVoxels.putAll(merged)
+        android.util.Log.i(
+            "DatasetExporter",
+            "Seed grid coarsened to ${"%.0f".format(depthVoxelSize * 1000f)}mm: " +
+                "$before -> ${depthVoxels.size} points (still ingesting all frames)"
+        )
+    }
+
     @Synchronized
     fun depthPointCount(): Int = depthVoxels.size
+
+    /** Guards against a second correction pass re-applying deltas. */
+    private var anchorCorrectionsApplied = false
+
+    /**
+     * Replace every anchor-backed keyframe pose with `anchor.pose * relativePose`,
+     * reading each anchor's CURRENT (ARCore-corrected) pose.
+     *
+     * MUST run on the ARCore/GL thread while the session is still resumed, and
+     * before the dataset is written or the photometric model is built -- both
+     * read [FrameMetaData.transformMatrix].
+     *
+     * Every failure path leaves the original absolute pose in place, so the worst
+     * case is exactly the previous behaviour.
+     *
+     * @return number of frames whose pose was corrected.
+     */
+    @Synchronized
+    fun applyAnchorCorrections(): Int {
+        if (anchorCorrectionsApplied) return 0
+        anchorCorrectionsApplied = true
+
+        var corrected = 0
+        var skipped = 0
+        var maxShiftM = 0f
+        val scratch = FloatArray(16)
+        // Per-frame 4x4 "corrected world <- recorded world" delta, column-major.
+        val deltas = arrayOfNulls<FloatArray>(capturedFrames.size)
+
+        for ((i, frame) in capturedFrames.withIndex()) {
+            val ref = frame.anchorRef ?: continue
+            try {
+                if (ref.anchor.trackingState != TrackingState.TRACKING) { skipped++; continue }
+                val world = ref.anchor.pose.compose(ref.relativePose)
+                world.toMatrix(scratch, 0)
+                if (!scratch.all { it.isFinite() }) { skipped++; continue }
+
+                val recorded = frame.capturePose
+                if (recorded != null) {
+                    val dx = world.tx() - recorded.tx()
+                    val dy = world.ty() - recorded.ty()
+                    val dz = world.tz() - recorded.tz()
+                    val shift = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+                    if (shift.isFinite() && shift > maxShiftM) maxShiftM = shift
+
+                    val d = FloatArray(16)
+                    world.compose(recorded.inverse()).toMatrix(d, 0)
+                    if (d.all { it.isFinite() }) deltas[i] = d
+                }
+
+                frame.transformMatrix = ARCoreCoordinateUtils.arcoreMatrixToC2W(scratch)
+                corrected++
+            } catch (t: Throwable) {
+                skipped++
+            }
+        }
+
+        if (corrected > 0) migrateSeedCloud(deltas)
+
+        android.util.Log.i(
+            "DatasetExporter",
+            "Anchor-relative poses: $corrected/${capturedFrames.size} frames re-composed from " +
+                "corrected anchors ($skipped kept absolute), max drift correction " +
+                "${"%.3f".format(maxShiftM)} m"
+        )
+        return corrected
+    }
+
+    /**
+     * Move each seed point by the same correction its source camera received.
+     *
+     * Correcting the cameras but not the points they were unprojected from would
+     * leave the two in different frames, so the optimizer would start from
+     * geometry that no longer lines up with any view -- worse than not
+     * correcting at all.
+     */
+    private fun migrateSeedCloud(deltas: Array<FloatArray?>) {
+        if (depthVoxels.isEmpty()) return
+        var moved = 0
+        for (v in depthVoxels.values) {
+            if (v.size < 9) continue
+            val fi = v[8].toInt()
+            if (fi < 0 || fi >= deltas.size) continue
+            val d = deltas[fi] ?: continue
+            val x = v[0]; val y = v[1]; val z = v[2]
+            // Column-major 4x4 applied to a point.
+            val nx = d[0] * x + d[4] * y + d[8] * z + d[12]
+            val ny = d[1] * x + d[5] * y + d[9] * z + d[13]
+            val nz = d[2] * x + d[6] * y + d[10] * z + d[14]
+            if (nx.isFinite() && ny.isFinite() && nz.isFinite()) {
+                v[0] = nx; v[1] = ny; v[2] = nz
+                moved++
+            }
+        }
+        android.util.Log.i("DatasetExporter", "Seed cloud migrated with its cameras: $moved points")
+    }
 
     /**
      * Save a frame that has already been JPEG-encoded (e.g. from an ARCore CPU image).
@@ -159,7 +322,9 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
         timestampNs: Long,
         sharpnessScore: Float,
         meanLuminance: Float,
-        pointsXyzc: FloatArray? = null
+        pointsXyzc: FloatArray? = null,
+        anchorRef: AnchorPoseRef? = null,
+        capturePose: Pose? = null
     ): String {
         val frameId = capturedFrames.size
         val fileName = String.format("frame_%04d.jpg", frameId)
@@ -174,7 +339,9 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
                 timestampNs = timestampNs,
                 transformMatrix = c2wMatrix,
                 sharpnessScore = sharpnessScore,
-                meanLuminance = meanLuminance
+                meanLuminance = meanLuminance,
+                anchorRef = anchorRef,
+                capturePose = capturePose
             )
         )
 
@@ -385,7 +552,14 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
      * confidently, so a room or corridor scan is never mangled.
      */
     @Synchronized
-    fun isolateSubject(radiusFactor: Float = 0.6f): Int {
+    /**
+     * @param subjectDistHint measured distance to whatever was in the centre of
+     *   frame, from the depth map. Ray convergence alone is unreliable: a scan
+     *   with a lot of rotation "converges" on a point in mid-air, and the sphere
+     *   around it then contains no geometry at all (observed: kept 0 of 250000).
+     *   Anchoring the centre to measured depth instead puts it on the object.
+     */
+    fun isolateSubject(subjectDistHint: Float = 0f, radiusFactor: Float = 0.6f): Int {
         if (depthVoxels.size < 2000 || capturedFrames.size < 8) return 0
         val cams = capturedFrames.map {
             floatArrayOf(it.transformMatrix[0][3], it.transformMatrix[1][3], it.transformMatrix[2][3])
@@ -396,9 +570,53 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
             val n = kotlin.math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2])
             if (n > 1e-6f) floatArrayOf(f[0] / n, f[1] / n, f[2] / n) else f
         }
-        val c = subjectCenter(cams, fwds) ?: run {
-            android.util.Log.i("DatasetExporter", "Subject isolation skipped: view rays do not converge")
-            return 0
+        // Candidate 1: where the view rays converge (good for a clean orbit).
+        val cRay = subjectCenter(cams, fwds)
+
+        // Candidate 2: the median point the cameras were actually LOOKING at, using
+        // measured centre-of-frame depth. Survives rotation-heavy capture, because
+        // it never relies on rays intersecting.
+        val cDepth: FloatArray? = if (subjectDistHint > 0.05f) {
+            val xs = FloatArray(cams.size); val ys = FloatArray(cams.size); val zs = FloatArray(cams.size)
+            for (i in cams.indices) {
+                xs[i] = cams[i][0] + fwds[i][0] * subjectDistHint
+                ys[i] = cams[i][1] + fwds[i][1] * subjectDistHint
+                zs[i] = cams[i][2] + fwds[i][2] * subjectDistHint
+            }
+            xs.sort(); ys.sort(); zs.sort()
+            floatArrayOf(xs[xs.size / 2], ys[ys.size / 2], zs[zs.size / 2])
+        } else null
+
+        // Pick whichever candidate actually has geometry around it -- the failure
+        // mode being guarded against is a centre floating in empty space.
+        fun pointsNear(centre: FloatArray, r: Float): Int {
+            var n = 0
+            val r2 = r * r
+            for (v in depthVoxels.values) {
+                val dx = v[0] - centre[0]; val dy = v[1] - centre[1]; val dz = v[2] - centre[2]
+                if (dx * dx + dy * dy + dz * dz <= r2) n++
+            }
+            return n
+        }
+
+        val c = when {
+            cRay == null && cDepth == null -> {
+                android.util.Log.i("DatasetExporter", "Subject isolation skipped: no usable subject centre")
+                return 0
+            }
+            cRay == null -> cDepth!!
+            cDepth == null -> cRay
+            else -> {
+                // Probe both at a generous radius before committing.
+                val probe = if (subjectDistHint > 0.05f) subjectDistHint * radiusFactor else 0.5f
+                val nRay = pointsNear(cRay, probe)
+                val nDepth = pointsNear(cDepth, probe)
+                android.util.Log.i(
+                    "DatasetExporter",
+                    "Subject centre probe: rayConvergence=$nRay points, depthGrounded=$nDepth points"
+                )
+                if (nDepth > nRay) cDepth else cRay
+            }
         }
         val dists = cams.map {
             kotlin.math.sqrt(

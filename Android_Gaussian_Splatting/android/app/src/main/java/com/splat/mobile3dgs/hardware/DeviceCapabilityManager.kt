@@ -80,10 +80,19 @@ object DeviceCapabilityManager {
                 // reason runs took 30+ minutes and thermally throttled. 720p with
                 // good parallax beats 1080p with poor parallax; 7000 steps and
                 // 1080p remain available as an explicit choice in the dialog.
-                totalSteps = 3000,
+                // 3000 steps was far too few. Reference 3DGS trains 30k and treats
+                // 7k as the first acceptable checkpoint; a measured run produced
+                // 493k Gaussians in 3000 steps, so everything densified after ~step
+                // 2000 was still an unoptimised blob. That reads as fog.
+                totalSteps = 7000,
                 maxResolution = 720,
                 maxGaussians = 1000000,
-                refineEvery = 100,
+                // Densification cadence is the only growth lever brush-c exposes
+                // (TrainOptions has no max_splats). Stretching it trades raw splat
+                // COUNT for splat QUALITY: fewer Gaussians each get more gradient
+                // steps, and every step is cheaper because there is less to
+                // rasterise -- sharper AND faster, rather than a pure time cost.
+                refineEvery = 250,
                 exportEvery = 1000,
                 useHalfPrecision = true,
                 totalRamGb = totalRamGb,
