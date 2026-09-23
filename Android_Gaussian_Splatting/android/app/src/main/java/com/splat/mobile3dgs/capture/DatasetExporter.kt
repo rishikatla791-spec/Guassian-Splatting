@@ -232,6 +232,13 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
     private var anchorCorrectionsApplied = false
 
     /**
+     * Largest amount a correction may lengthen the step between two neighbouring
+     * keyframes. Real steps are ~0.1 m; growing one by more than this means the
+     * correction is tearing the camera path rather than straightening it.
+     */
+    private val MAX_CORRECTION_STEP_GROWTH_M = 0.10f
+
+    /**
      * Replace every anchor-backed keyframe pose with `anchor.pose * relativePose`,
      * reading each anchor's CURRENT (ARCore-corrected) pose.
      *
@@ -255,6 +262,8 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
         val scratch = FloatArray(16)
         // Per-frame 4x4 "corrected world <- recorded world" delta, column-major.
         val deltas = arrayOfNulls<FloatArray>(capturedFrames.size)
+        // Corrected c2w per frame, staged until the whole set is known to be safe.
+        val pending = arrayOfNulls<Array<FloatArray>>(capturedFrames.size)
 
         for ((i, frame) in capturedFrames.withIndex()) {
             val ref = frame.anchorRef ?: continue
@@ -277,22 +286,68 @@ class DatasetExporter(context: Context, sessionName: String = "3dgs_arcore_${Sys
                     if (d.all { it.isFinite() }) deltas[i] = d
                 }
 
-                frame.transformMatrix = ARCoreCoordinateUtils.arcoreMatrixToC2W(scratch)
+                // Stage, do not commit: the correction is only safe if it holds
+                // together as a whole -- see the smoothness check below.
+                pending[i] = ARCoreCoordinateUtils.arcoreMatrixToC2W(scratch)
                 corrected++
             } catch (t: Throwable) {
                 skipped++
             }
         }
 
-        if (corrected > 0) migrateSeedCloud(deltas)
+        // Would committing this make the camera path TEAR?
+        //
+        // Consecutive keyframes are ~0.1 s apart, so the phone physically moved a
+        // few centimetres between them. A correction that is partial (some frames
+        // on a re-anchored map, some still on the original one) or uneven (each
+        // anchor shifted by a different amount) opens a gap exactly where two
+        // groups meet. Measured on a Mali device: 35 of 100 frames corrected by up
+        // to 1.509 m left 1.487 m and 1.440 m jumps between neighbouring frames --
+        // 15.6 m/s for a handheld phone -- which destroys the reconstruction far
+        // more thoroughly than the drift being removed. A correction is accepted
+        // only if no step between neighbours grows by more than the tolerance
+        // compared with what ARCore originally recorded.
+        var worstGrowthM = 0f
+        var worstAt = -1
+        for (k in 1 until capturedFrames.size) {
+            val r0 = capturedFrames[k - 1].capturePose ?: continue
+            val r1 = capturedFrames[k].capturePose ?: continue
+            val rawStep = dist3(r0.tx(), r0.ty(), r0.tz(), r1.tx(), r1.ty(), r1.tz())
+            val c0 = pending[k - 1] ?: capturedFrames[k - 1].transformMatrix
+            val c1 = pending[k] ?: capturedFrames[k].transformMatrix
+            val newStep = dist3(c0[0][3], c0[1][3], c0[2][3], c1[0][3], c1[1][3], c1[2][3])
+            val growth = newStep - rawStep
+            if (growth > worstGrowthM) { worstGrowthM = growth; worstAt = k }
+        }
+
+        if (corrected == 0 || worstGrowthM > MAX_CORRECTION_STEP_GROWTH_M) {
+            android.util.Log.w(
+                "DatasetExporter",
+                "Anchor correction REJECTED -- keeping every frame on its recorded pose. " +
+                    "$corrected/${capturedFrames.size} frames were correctable ($skipped not), " +
+                    "max shift ${"%.3f".format(maxShiftM)} m, but committing would have " +
+                    "stretched the step into frame $worstAt by ${"%.3f".format(worstGrowthM)} m " +
+                    "(limit ${"%.2f".format(MAX_CORRECTION_STEP_GROWTH_M)} m)."
+            )
+            return 0
+        }
+
+        for (i in pending.indices) pending[i]?.let { capturedFrames[i].transformMatrix = it }
+        migrateSeedCloud(deltas)
 
         android.util.Log.i(
             "DatasetExporter",
             "Anchor-relative poses: $corrected/${capturedFrames.size} frames re-composed from " +
                 "corrected anchors ($skipped kept absolute), max drift correction " +
-                "${"%.3f".format(maxShiftM)} m"
+                "${"%.3f".format(maxShiftM)} m, worst neighbour-step growth " +
+                "${"%.3f".format(worstGrowthM)} m"
         )
         return corrected
+    }
+
+    private fun dist3(ax: Float, ay: Float, az: Float, bx: Float, by: Float, bz: Float): Float {
+        val dx = ax - bx; val dy = ay - by; val dz = az - bz
+        return kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
     }
 
     /**

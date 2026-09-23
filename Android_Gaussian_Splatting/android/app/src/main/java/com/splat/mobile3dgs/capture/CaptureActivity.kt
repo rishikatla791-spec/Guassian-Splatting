@@ -31,6 +31,7 @@ import com.google.ar.core.Config
 import com.google.ar.core.Frame
 import com.google.ar.core.Pose
 import com.google.ar.core.Session
+import com.google.ar.core.TrackingFailureReason
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.NotYetAvailableException
@@ -132,6 +133,8 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
      */
     private val recentMoved = ArrayDeque<Boolean>()
     @Volatile private var orbitHint: String? = null
+    private var lastKeptTimestampNs = 0L
+    @Volatile private var trackingJumps = 0
 
     /** Last detailed engine result, so a failure dialog can name the actual cause. */
     @Volatile private var lastTrainingResult: com.splat.mobile3dgs.engine.TrainingResult? = null
@@ -212,6 +215,12 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         /** Past this the subject is too small in frame to resolve detail. */
         private const val TOO_FAR_M = 3.0f
+
+        /**
+         * Fastest a person moves a phone while scanning. Measured on a bad capture:
+         * 16 of 99 keyframe steps implied 1.8-15.6 m/s, all tracker glitches.
+         */
+        private const val MAX_HANDHELD_SPEED_MPS = 2.0f
 
         private const val ROTATION_ONLY_STEP_M = 0.02f
 
@@ -556,7 +565,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             if (tracking && !haveIntrinsics) captureIntrinsics(frame)
             if (tracking && isRecording) maybeCaptureKeyframe(frame)
 
-            updateStatusText(tracking)
+            updateStatusText(tracking, if (tracking) null else camera.trackingFailureReason)
         } catch (e: CameraNotAvailableException) {
             Log.e(TAG, "Camera not available during draw", e)
         } catch (e: Exception) {
@@ -636,6 +645,30 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         val pose = frame.camera.pose
         val pos = floatArrayOf(pose.tx(), pose.ty(), pose.tz())
         val quat = floatArrayOf(pose.qx(), pose.qy(), pose.qz(), pose.qw()) // [x, y, z, w]
+
+        // Refuse poses the phone cannot physically have reached. VIO can glitch --
+        // a lost-and-recovered track snaps the pose by metres in one frame -- and a
+        // keyframe taken at a glitched pose is wrong for good: every Gaussian it
+        // touches is optimised against a camera that was never there. A hand-held
+        // scan does not exceed ~2 m/s, so anything faster is the tracker, not the
+        // user. The last GOOD pose stays the reference, so a transient spike is
+        // simply skipped and capture continues from where it really was.
+        val prevPos = lastKeptPos
+        if (prevPos != null && lastKeptTimestampNs > 0L) {
+            val dtS = (frame.timestamp - lastKeptTimestampNs) / 1e9f
+            if (dtS > 0f) {
+                val speed = distance(pos, prevPos) / dtS
+                if (speed > MAX_HANDHELD_SPEED_MPS) {
+                    trackingJumps++
+                    if (trackingJumps <= 5 || trackingJumps % 20 == 0) {
+                        Log.w(TAG, "Tracking jump rejected: ${"%.2f".format(distance(pos, prevPos))} m in " +
+                                "${"%.2f".format(dtS)} s (${"%.1f".format(speed)} m/s) -- total $trackingJumps")
+                    }
+                    orbitHint = "Tracking unstable — move slower, aim at textured areas"
+                    return
+                }
+            }
+        }
 
         // Keep a frame only if it is a genuinely NEW viewpoint compared with every
         // frame already kept -- not merely different from the previous one. Comparing
@@ -815,6 +848,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         }
 
         val timestamp = frame.timestamp
+        lastKeptTimestampNs = timestamp
         lastKeptPos = pos
         lastKeptQuat = quat
         keptPositions.add(pos)
@@ -876,6 +910,8 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         frameQualityFilter.reset()
         recentMoved.clear()
         orbitHint = null
+        lastKeptTimestampNs = 0L
+        trackingJumps = 0
         lastQualityHintMs = 0L
         qualityHintShowing = false
 
@@ -911,6 +947,7 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private fun stopRecordingSession() {
         isRecording = false
         Log.i(TAG, "Frame quality: ${frameQualityFilter.summary()}")
+        Log.i(TAG, "Tracking jumps rejected during capture: $trackingJumps")
         // Logged once per scan: the first-frame-only diagnostic hid that depth was
         // failing for the WHOLE run, not just while ARCore warmed up.
         Log.i(TAG, "Depth yield (last frame): ${DepthPointExtractor.lastStats()} " +
@@ -1161,7 +1198,25 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         btnRecord.text = "Start 3D Scan"
     }
 
-    private fun updateStatusText(tracking: Boolean) {
+    /**
+     * ARCore reports WHY it lost tracking. That used to be discarded, so during a
+     * scan the app silently stopped taking frames with no indication of what the
+     * user should change.
+     */
+    private fun trackingFailureText(reason: TrackingFailureReason?): String = when (reason) {
+        TrackingFailureReason.INSUFFICIENT_LIGHT -> "Too dark to track — add light"
+        TrackingFailureReason.EXCESSIVE_MOTION -> "Moving too fast — slow down"
+        TrackingFailureReason.INSUFFICIENT_FEATURES -> "Nothing to track — aim at textured surfaces"
+        TrackingFailureReason.CAMERA_UNAVAILABLE -> "Camera unavailable"
+        else -> "Tracking lost — move slowly over a textured area"
+    }
+
+    private fun updateStatusText(tracking: Boolean, failure: TrackingFailureReason? = null) {
+        if (isRecording && !tracking) {
+            val text = trackingFailureText(failure)
+            runOnUiThread { tvStatus.text = text }
+            return
+        }
         if (isRecording) {
             val spanCm = if (pMaxX > pMinX) {
                 val dx = pMaxX - pMinX; val dy = pMaxY - pMinY; val dz = pMaxZ - pMinZ
@@ -1175,7 +1230,10 @@ class CaptureActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 if (hint != null) tvStatus.text = hint
             }
         } else if (!tracking) {
-            runOnUiThread { tvStatus.text = "Move phone slowly to start tracking..." }
+            val text = if (failure == null || failure == TrackingFailureReason.NONE) {
+                "Move phone slowly to start tracking..."
+            } else trackingFailureText(failure)
+            runOnUiThread { tvStatus.text = text }
         }
     }
 
