@@ -423,6 +423,15 @@ class TrainingService : Service() {
             Log.w(TAG, "Model was decimated to fit this device's Gaussian budget")
         }
 
+        // A real reconstruction replaced the pre-written preview, so clear its
+        // marker. Only a genuine success does this -- a failed or cancelled run
+        // leaves the file flagged as untrained so the gallery can say so.
+        if (result.ok) {
+            runCatching {
+                java.io.File(output + com.splat.mobile3dgs.engine.GaussianInitializer.PREVIEW_MARKER_SUFFIX).delete()
+            }
+        }
+
         resultListener?.invoke(result)
         doneListener?.invoke(result.ok, output)
         showTerminalNotification(result, output, modelName)

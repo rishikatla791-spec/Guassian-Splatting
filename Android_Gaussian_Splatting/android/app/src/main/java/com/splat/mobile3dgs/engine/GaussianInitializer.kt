@@ -23,6 +23,9 @@ import kotlin.math.sqrt
  */
 object GaussianInitializer {
 
+    /** Sidecar marking a .splat as an untrained preview; deleted on training success. */
+    const val PREVIEW_MARKER_SUFFIX = ".preview"
+
     /** Voxel-downsample a raw ARCore point cloud, keeping the most confident point per cell. */
     private fun voxelFilter(points: List<FeaturePoint3D>, voxelSize: Float): List<FeaturePoint3D> {
         val voxelMap = HashMap<Long, FeaturePoint3D>()
@@ -430,7 +433,15 @@ object GaussianInitializer {
             out.write(buffer.array())
         }
 
-        android.util.Log.i("GaussianInitializer", "Direct Photometric Splat generated: $numPoints splats into ${outputFile.name}")
+        // Mark this file as a PREVIEW, not a reconstruction. It is written before
+        // training so that something exists if training dies; a successful run
+        // deletes the marker when it replaces the file. Without it a failed run
+        // leaves an untrained point cloud sitting in the gallery looking exactly
+        // like a finished model -- which is how a flat, image-on-a-plane preview
+        // gets mistaken for the actual 3D output.
+        runCatching { File(outputFile.absolutePath + PREVIEW_MARKER_SUFFIX).writeText("untrained") }
+
+        android.util.Log.i("GaussianInitializer", "Direct Photometric Splat generated: $numPoints splats into ${outputFile.name} (marked as preview)")
         return numPoints
     }
 }

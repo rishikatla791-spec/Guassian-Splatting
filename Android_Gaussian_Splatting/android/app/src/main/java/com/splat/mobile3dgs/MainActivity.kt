@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDeviceStatus: TextView
 
     private lateinit var cardTraining: View
+    @Volatile private var lastTrainingResult: com.splat.mobile3dgs.engine.TrainingResult? = null
     private lateinit var tvTrainingPct: TextView
     private lateinit var tvTrainingState: TextView
     private lateinit var progressTraining: ProgressBar
@@ -58,7 +59,13 @@ class MainActivity : AppCompatActivity() {
         val sizeMb: Double,
         val gaussians: Long,
         val modifiedAt: Long,
-        val datasetDir: File?
+        val datasetDir: File?,
+        /**
+         * True when this .splat is still the pre-training photometric preview --
+         * coloured seed points, not a reconstruction. Shown as a flat, image-like
+         * cloud, so it must never be presented as a finished model.
+         */
+        val isUntrainedPreview: Boolean = false
     )
 
     private val pickFileLauncher =
@@ -103,6 +110,7 @@ class MainActivity : AppCompatActivity() {
         TrainingService.progressListener = { step, pct ->
             runOnUiThread { showTrainingProgress(step, pct) }
         }
+        TrainingService.resultListener = { r -> lastTrainingResult = r }
         TrainingService.doneListener = { ok, _ ->
             runOnUiThread { showTrainingDone(ok) }
         }
@@ -113,6 +121,7 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
         TrainingService.progressListener = null
         TrainingService.doneListener = null
+        TrainingService.resultListener = null
     }
 
     private fun startCapture() {
@@ -158,7 +167,11 @@ class MainActivity : AppCompatActivity() {
                         sizeMb = f.length() / (1024.0 * 1024.0),
                         gaussians = f.length() / SPLAT_STRIDE,
                         modifiedAt = f.lastModified(),
-                        datasetDir = dataset
+                        datasetDir = dataset,
+                        isUntrainedPreview = File(
+                            f.absolutePath +
+                                com.splat.mobile3dgs.engine.GaussianInitializer.PREVIEW_MARKER_SUFFIX
+                        ).exists()
                     )
                 }
                 .sortedByDescending { it.modifiedAt }
@@ -367,6 +380,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTrainingDone(ok: Boolean) {
+        if (!ok) {
+            // A two-second label was the only thing distinguishing a failed run
+            // from a successful one, after which the untrained preview appeared
+            // in the gallery looking like a result. Say what actually happened.
+            lastTrainingResult?.let { r ->
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.training_failed)
+                    .setMessage(buildString {
+                        appendLine(r.errorCode)
+                        appendLine()
+                        append(r.message)
+                    })
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show()
+            }
+        }
         tvTrainingState.setText(if (ok) R.string.training_done else R.string.training_failed)
         if (ok) progressTraining.progress = 100
         cardTraining.animate().alpha(0f).setStartDelay(2500).setDuration(300)
@@ -411,10 +440,12 @@ class MainActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val m = items[position]
             val ctx = holder.itemView.context
-            holder.name.text = m.name
-            holder.gaussians.text = ctx.getString(
-                R.string.model_meta_gaussians, String.format("%,d", m.gaussians)
-            )
+            holder.name.text = if (m.isUntrainedPreview) "${m.name}  •  PREVIEW" else m.name
+            holder.gaussians.text = if (m.isUntrainedPreview) {
+                ctx.getString(R.string.model_meta_untrained)
+            } else {
+                ctx.getString(R.string.model_meta_gaussians, String.format("%,d", m.gaussians))
+            }
             holder.size.text = ctx.getString(R.string.model_meta_size, "%.1f".format(m.sizeMb))
             holder.date.text = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(m.modifiedAt))
             holder.thumb.setBackgroundResource(thumbs[position % thumbs.size])
