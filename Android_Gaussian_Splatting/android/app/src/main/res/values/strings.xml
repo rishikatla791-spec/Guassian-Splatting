@@ -41,6 +41,7 @@
     <string name="training_preparing">Warming up the optimizer…</string>
     <string name="training_hint">Keep using your phone — progress continues in the background.</string>
     <string name="model_meta_untrained">Not trained — seed points only</string>
+    <string name="device_engine_unavailable">GPU trainer unavailable on this device — capture still works</string>
     <string name="training_cancel">Stop training</string>
     <string name="training_cancel_title">Stop training?</string>
     <string name="training_cancel_body">Progress since the last checkpoint will be lost. The engine cannot release its memory without a restart, so the app will reopen straight away. Your capture is saved and can be re-trained.</string>

@@ -135,6 +135,42 @@ class MainActivity : AppCompatActivity() {
             profile.tier.tierName,
             "%.1f".format(profile.totalRamGb)
         )
+        probeTrainingEngine()
+    }
+
+    /**
+     * Check the GPU trainer at launch instead of mid-capture.
+     *
+     * The Vulkan probe previously ran inside the capture flow, so a device whose
+     * driver the engine cannot use only found out AFTER the user had finished
+     * scanning. Loading the library and querying the adapter is cheap; doing it
+     * on startup means an incompatible phone says so immediately, and the adapter
+     * details land in logcat for every device we test on.
+     */
+    private fun probeTrainingEngine() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val available = runCatching {
+                com.splat.mobile3dgs.engine.NativeBrushEngine.isNativeEngineAvailable()
+            }.getOrDefault(false)
+            val report = runCatching {
+                com.splat.mobile3dgs.engine.NativeBrushEngine.vulkanReport()
+            }.getOrElse { "probe threw: ${it.message}" }
+            val loadError = runCatching {
+                com.splat.mobile3dgs.engine.NativeBrushEngine.getLoadError()
+            }.getOrNull()
+
+            android.util.Log.i("MainActivity", "Training engine probe: available=$available")
+            android.util.Log.i("MainActivity", "Vulkan report: $report")
+            if (!available && loadError != null) {
+                android.util.Log.e("MainActivity", "Engine load error: $loadError")
+            }
+
+            if (!available) {
+                withContext(Dispatchers.Main) {
+                    tvDeviceStatus.text = getString(R.string.device_engine_unavailable)
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- models
